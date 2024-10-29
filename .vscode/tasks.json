@@ -1,0 +1,75 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "cargo build",
+            "type": "shell",
+            "command": "cargo",
+            "args": [
+                "build"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}/backend"
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": [
+                "$rustc"
+            ]
+        },
+        {
+            "label": "start-npm",
+            "type": "shell",
+            "command": "npm",
+            "args": [
+                "start"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}/frontend",
+                "env": {
+                    "BROWSER": "none"
+                }
+            },
+            "isBackground": true,
+            "problemMatcher": {
+                "owner": "custom",
+                "fileLocation": [
+                    "relative",
+                    "${workspaceFolder}/frontend"
+                ],
+                "pattern": [
+                    {
+                        "regexp": ".",
+                        "file": 1,
+                        "location": 2,
+                        "message": 3
+                    }
+                ],
+                "background": {
+                    "activeOnStart": true,
+                    "beginsPattern": ".",
+                    "endsPattern": "."
+                }
+            }
+        },
+        {
+            "label": "start-dev-builds",
+            "dependsOrder": "parallel",
+            "dependsOn": [
+                "start-npm",
+                "cargo build"
+            ]
+        },
+        {
+            "label": "stop-npm",
+            "type": "shell",
+            "command": "pkill",
+            "args": [
+                "-f",
+                "npm"
+            ]
+        }
+    ]
+}

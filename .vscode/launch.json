@@ -2,16 +2,36 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Debug Rust",
+            "name": "Server",
             "type": "lldb",
             "request": "launch",
             "program": "${workspaceFolder}/backend/target/debug/artbabo",
             "args": [],
             "cwd": "${workspaceFolder}",
+            "stopOnEntry": false,
+            "preLaunchTask": "cargo build",
+            "console": "integratedTerminal"
+        },
+        {
+            "type": "msedge",
+            "request": "launch",
+            "name": "Client",
+            "url": "http://localhost:3000",
+            "webRoot": "${workspaceFolder}/frontend/src",
+            "preLaunchTask": "start-npm",
+            "postDebugTask": "stop-npm",
+        }
+    ],
+    "compounds": [
+        {
+            "name": "Server/Client",
+            "configurations": [
+                "Server",
+                "Client"
+            ],
             "preLaunchTask": "start-dev-builds",
             "postDebugTask": "stop-npm",
-            "stopOnEntry": false,
-            "console": "integratedTerminal"
+            "stopAll": true
         }
     ]
 }

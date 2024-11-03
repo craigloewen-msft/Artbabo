@@ -1,19 +1,29 @@
 use bevy::{prelude::*, render::camera::ScalingMode};
+use bevy_egui::{
+    egui::{self, Align2, Color32, FontId, RichText},
+    EguiContexts, EguiPlugin,
+};
+
+mod scene_intro;
 
 fn main() {
     App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                // fill the entire browser window
-                fit_canvas_to_parent: true,
-                // don't hijack keyboard shortcuts like F5, F6, F12, Ctrl+R etc.
-                prevent_default_event_handling: false,
+        .add_plugins((
+            DefaultPlugins.set(WindowPlugin {
+                primary_window: Some(Window {
+                    // fill the entire browser window
+                    fit_canvas_to_parent: true,
+                    // don't hijack keyboard shortcuts like F5, F6, F12, Ctrl+R etc.
+                    prevent_default_event_handling: false,
+                    ..default()
+                }),
                 ..default()
             }),
-            ..default()
-        }))
-        .insert_resource(ClearColor(Color::srgb(0.53, 0.53, 0.53))) 
-        .add_systems(Startup, (setup, spawn_player)) 
+            EguiPlugin,
+        ))
+        .insert_resource(ClearColor(Color::srgb(0.53, 0.53, 0.53)))
+        .add_systems(Startup, (setup, spawn_player))
+        .add_systems(Update, update_score_ui)
         .run();
 }
 
@@ -32,4 +42,16 @@ fn spawn_player(mut commands: Commands) {
         },
         ..default()
     });
+}
+
+fn update_score_ui(mut contexts: EguiContexts) {
+    egui::Area::new("score".into())
+        .anchor(Align2::CENTER_TOP, (0., 25.))
+        .show(contexts.ctx_mut(), |ui| {
+            ui.label(
+                RichText::new(format!("0 - 2"))
+                    .color(Color32::BLACK)
+                    .font(FontId::proportional(72.0)),
+            );
+        });
 }

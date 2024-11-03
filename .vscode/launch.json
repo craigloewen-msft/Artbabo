@@ -9,29 +9,7 @@
             "args": [],
             "cwd": "${workspaceFolder}",
             "stopOnEntry": false,
-            "preLaunchTask": "cargo build",
+            "preLaunchTask": "cargo-build-server",
             "console": "integratedTerminal"
-        },
-        {
-            "type": "msedge",
-            "request": "launch",
-            "name": "Client",
-            "url": "http://localhost:3000",
-            "webRoot": "${workspaceFolder}/frontend/src",
-            "preLaunchTask": "start-npm",
-            "postDebugTask": "stop-npm",
         }
-    ],
-    "compounds": [
-        {
-            "name": "Server/Client",
-            "configurations": [
-                "Server",
-                "Client"
-            ],
-            "preLaunchTask": "start-dev-builds",
-            "postDebugTask": "stop-npm",
-            "stopAll": true
-        }
-    ]
 }

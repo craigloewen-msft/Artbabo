@@ -1,15 +1,13 @@
 use bevy::{prelude::*, render::camera::ScalingMode};
-use bevy_egui::{
-    egui::{self, Align2, Color32, FontId, RichText},
-    EguiContexts, EguiPlugin,
-};
+use bevy_egui::EguiPlugin;
 
 mod scenes;
 use scenes::{GameState, Images};
+mod resources;
 
 fn main() {
     let room_creation_scenes = scenes::get_intro_system_methods();
-    let loading_systems = scenes::get_loading_system_methods();
+    let intro_systems = scenes::get_intro_system_methods();
 
     App::new()
         .add_plugins((
@@ -25,17 +23,19 @@ fn main() {
             }),
             EguiPlugin,
         ))
-        .insert_resource(ClearColor(Color::srgb(0.53, 0.53, 0.53)))
         .init_resource::<Images>()
+        .insert_resource(resources::PlayerSettings {
+            username: String::new(),
+        })
         .init_state::<GameState>()
         .add_systems(Startup, setup)
         .add_systems(Update, room_creation_scenes.run_if(in_state(GameState::RoomCreation)))
-        .add_systems(Update, loading_systems)
+        .add_systems(Update, intro_systems)
         .run();
 }
 
 
-fn setup(mut contexts: EguiContexts, mut commands: Commands) {
+fn setup(mut commands: Commands) {
     let mut camera_bundle = Camera2dBundle::default();
     camera_bundle.projection.scaling_mode = ScalingMode::FixedVertical(10.);
     commands.spawn(camera_bundle);

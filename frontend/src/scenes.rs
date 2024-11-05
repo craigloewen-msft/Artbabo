@@ -1,16 +1,18 @@
 use bevy::prelude::*;
 use bevy_egui::{
-    egui::{self, load::SizedTexture, Align2, Color32, FontId, ImageSource, RichText},
+    egui::{self, Align2, Color32, FontId, RichText},
     EguiContexts,
 };
+
+use crate::resources::PlayerSettings;
+mod backend_server_connections;
 
 // === GameState enum ===
 #[derive(States, Clone, Eq, PartialEq, Debug, Hash, Default)]
 pub enum GameState {
     #[default]
-    Loading,
+    Intro,
     RoomCreation,
-    Playing,
 }
 
 // === Assets ===
@@ -28,13 +30,67 @@ impl FromWorld for Images {
     }
 }
 
-// === Loading scenes ===
+// === Intro scenes ===
+pub fn draw_intro_ui(
+    mut contexts: EguiContexts,
+    mut input_text: Local<String>,
+    mut player_settings: ResMut<PlayerSettings>,
+) {
+    if (player_settings.username != "") {
+        // Room option select screen
+        egui::Area::new("welcome_area".into())
+            .anchor(Align2::CENTER_TOP, (0., 200.))
+            .show(contexts.ctx_mut(), |ui| {
+                ui.vertical(|ui| {
+                    ui.label("Select a room");
+                    ui.horizontal(|ui| {
+                        let random_room = ui.button("Join random room");
+                        let private_room = ui.button("Join private room");
 
-pub fn draw_loading_ui(
+                        if random_room.clicked() {
+                            info!("REQUESTING: Joining random room");
+                            if backend_server_connections::request_random_room() {
+                                info!("Joined random room");
+                            } else {
+                                warn!("Failed to join random room");
+                            }
+                        }
+                        if private_room.clicked() {
+                            info!("Joining private room");
+                        }
+                    });
+                });
+            });
+    } else {
+        // Username input screen
+        egui::Area::new("input_area".into())
+            .anchor(Align2::CENTER_TOP, (0., 200.))
+            .show(contexts.ctx_mut(), |ui| {
+                ui.vertical(|ui| {
+                    ui.label("Enter username");
+                    ui.horizontal(|ui| {
+                        ui.text_edit_singleline(&mut *input_text);
+                        if ui.button("Submit").clicked() {
+                            warn!("Text input: {}", *input_text);
+                            player_settings.username = input_text.clone();
+                        }
+                    });
+                });
+            });
+    }
+}
+
+pub fn get_intro_system_methods() -> fn(EguiContexts, Local<String>, ResMut<PlayerSettings>) {
+    draw_intro_ui
+}
+
+// === ETC ===
+
+pub fn draw_image(
     mut contexts: EguiContexts,
     mut is_initialized: Local<bool>,
-    mut rendered_texture_id: Local<egui::TextureId>,
     images: Res<Images>,
+    mut rendered_texture_id: Local<egui::TextureId>,
 ) {
     if !*is_initialized {
         *is_initialized = true;
@@ -44,48 +100,11 @@ pub fn draw_loading_ui(
     egui::Area::new("example_area2".into())
         .anchor(Align2::CENTER_TOP, (0., 100.))
         .show(contexts.ctx_mut(), |ui| {
-            let added_button = ui.add(egui::ImageButton::new(egui::widgets::Image::new(egui::load::SizedTexture::new(
-                *rendered_texture_id,
-                [256.0, 256.0],
-            ))));
+            let added_button = ui.add(egui::ImageButton::new(egui::widgets::Image::new(
+                egui::load::SizedTexture::new(*rendered_texture_id, [256.0, 256.0]),
+            )));
             if added_button.clicked() {
                 println!("Image clicked!");
             }
         });
-
-    egui::Area::new("score".into())
-        .anchor(Align2::CENTER_TOP, (0., 25.))
-        .show(contexts.ctx_mut(), |ui| {
-            ui.label(
-                RichText::new(format!("0 - 2"))
-                    .color(Color32::BLACK)
-                    .font(FontId::proportional(72.0)),
-            );
-            let rect = egui::Rect::from_min_size(Default::default(), egui::Vec2::splat(100.0));
-            egui::Image::new(egui::include_image!("../assets/dog.png"))
-                .rounding(5.0)
-                .tint(egui::Color32::LIGHT_BLUE)
-                .paint_at(ui, rect);
-        });
-}
-
-pub fn get_loading_system_methods(
-) -> fn(EguiContexts, Local<bool>, Local<egui::TextureId>, Res<Images>) {
-    draw_loading_ui
-}
-
-// === Intro scenes ===
-
-pub fn draw_intro_ui(mut contexts: EguiContexts) {
-    egui::Area::new("example_area".into())
-        .anchor(Align2::CENTER_TOP, (0., 25.))
-        .show(contexts.ctx_mut(), |ui| {
-            if ui.button("Click me").clicked() {
-                println!("Button clicked!");
-            }
-        });
-}
-
-pub fn get_intro_system_methods() -> fn(EguiContexts) {
-    draw_intro_ui
 }

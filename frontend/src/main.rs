@@ -4,9 +4,17 @@ use bevy_egui::{
     EguiContexts, EguiPlugin,
 };
 
-mod scene_intro;
+mod scenes;
+use scenes::{GameState, Images};
 
 fn main() {
+    let room_creation_scenes = scenes::get_intro_system_methods();
+    let loading_systems = scenes::get_loading_system_methods();
+
+    info!("Starting the game");
+    eprintln!("Starting the game");
+    warn!("Something has happened");
+
     App::new()
         .add_plugins((
             DefaultPlugins.set(WindowPlugin {
@@ -22,36 +30,18 @@ fn main() {
             EguiPlugin,
         ))
         .insert_resource(ClearColor(Color::srgb(0.53, 0.53, 0.53)))
-        .add_systems(Startup, (setup, spawn_player))
-        .add_systems(Update, update_score_ui)
+        .init_resource::<Images>()
+        .init_state::<GameState>()
+        .add_systems(Startup, setup)
+        .add_systems(Update, room_creation_scenes.run_if(in_state(GameState::RoomCreation)))
+        .add_systems(Update, loading_systems)
         .run();
 }
 
-fn setup(mut commands: Commands) {
+
+fn setup(mut contexts: EguiContexts, mut commands: Commands) {
+    info!("Setting up the app");
     let mut camera_bundle = Camera2dBundle::default();
     camera_bundle.projection.scaling_mode = ScalingMode::FixedVertical(10.);
     commands.spawn(camera_bundle);
-}
-
-fn spawn_player(mut commands: Commands) {
-    commands.spawn(SpriteBundle {
-        sprite: Sprite {
-            color: Color::srgb(0., 0.47, 1.),
-            custom_size: Some(Vec2::new(1., 1.)),
-            ..default()
-        },
-        ..default()
-    });
-}
-
-fn update_score_ui(mut contexts: EguiContexts) {
-    egui::Area::new("score".into())
-        .anchor(Align2::CENTER_TOP, (0., 25.))
-        .show(contexts.ctx_mut(), |ui| {
-            ui.label(
-                RichText::new(format!("0 - 2"))
-                    .color(Color32::BLACK)
-                    .font(FontId::proportional(72.0)),
-            );
-        });
 }

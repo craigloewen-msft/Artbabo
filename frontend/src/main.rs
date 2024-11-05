@@ -11,10 +11,6 @@ fn main() {
     let room_creation_scenes = scenes::get_intro_system_methods();
     let loading_systems = scenes::get_loading_system_methods();
 
-    info!("Starting the game");
-    eprintln!("Starting the game");
-    warn!("Something has happened");
-
     App::new()
         .add_plugins((
             DefaultPlugins.set(WindowPlugin {
@@ -40,7 +36,6 @@ fn main() {
 
 
 fn setup(mut contexts: EguiContexts, mut commands: Commands) {
-    info!("Setting up the app");
     let mut camera_bundle = Camera2dBundle::default();
     camera_bundle.projection.scaling_mode = ScalingMode::FixedVertical(10.);
     commands.spawn(camera_bundle);

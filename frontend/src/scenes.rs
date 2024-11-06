@@ -1,4 +1,5 @@
 use std::time::Duration;
+use bevy_http_client::prelude::*;
 
 use bevy::{
     ecs::{system::SystemState, world::CommandQueue},
@@ -12,6 +13,7 @@ use bevy_egui::{
 
 use crate::resources::PlayerSettings;
 mod backend_server_connections;
+use backend_server_connections::*;
 
 // === GameState enum ===
 #[derive(States, Clone, Eq, PartialEq, Debug, Hash, Default)]
@@ -45,7 +47,7 @@ pub fn draw_intro_ui(
     mut contexts: EguiContexts,
     mut input_text: Local<String>,
     mut player_settings: ResMut<PlayerSettings>,
-    mut commands: Commands,
+    mut ev_request: EventWriter<TypedRequest<IpInfo>>,
 ) {
     let task_pool = AsyncComputeTaskPool::get();
 
@@ -62,6 +64,8 @@ pub fn draw_intro_ui(
 
                         if random_room.clicked() {
                             info!("Starting request to server");
+
+                            send_ip_request(ev_request);
 
                             // let task_entity = commands.spawn_empty().id();
                             // let task: Task<CommandQueue> = task_pool.spawn(async move {
@@ -106,9 +110,8 @@ pub fn draw_intro_ui(
     }
 }
 
-pub fn add_intro_scene_logic(main_app: &mut App) {
-    main_app
-        .init_resource::<Images>()
+pub fn add_intro_scenes(app: &mut App) {
+    app.init_resource::<Images>()
         .add_systems(Update, draw_intro_ui);
 }
 
@@ -135,4 +138,11 @@ pub fn draw_image(
                 println!("Image clicked!");
             }
         });
+}
+
+// === Main add logic ===
+
+pub fn add_scenes(app: &mut App) {
+    add_intro_scenes(app);
+    add_backend_server_connections(app);
 }

@@ -77,7 +77,7 @@ pub fn draw_intro_ui(
 
                             //     command_queue
                             // });
-                            
+
                             // commands.entity(task_entity).insert(IntroSceneTasks(task));
                         }
 
@@ -106,9 +106,10 @@ pub fn draw_intro_ui(
     }
 }
 
-pub fn get_intro_system_methods(
-) -> fn(EguiContexts, Local<String>, ResMut<PlayerSettings>, Commands) {
-    draw_intro_ui
+pub fn add_intro_scene_logic(main_app: &mut App) {
+    main_app
+        .init_resource::<Images>()
+        .add_systems(Update, draw_intro_ui);
 }
 
 // === ETC ===

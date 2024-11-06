@@ -4,7 +4,7 @@ use bevy_http_client::prelude::*;
 use serde::Deserialize;
 
 mod scenes;
-use scenes::{GameState, Images};
+use scenes::{add_intro_scene_logic, GameState, Images};
 mod resources;
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -27,11 +27,9 @@ pub struct IpInfo {
 }
 
 fn main() {
-    let room_creation_scenes = scenes::get_intro_system_methods();
-    let intro_systems = scenes::get_intro_system_methods();
+    let mut app = App::new();
 
-    App::new()
-        .add_plugins((
+    app.add_plugins((
             DefaultPlugins.set(WindowPlugin {
                 primary_window: Some(Window {
                     // fill the entire browser window
@@ -45,17 +43,11 @@ fn main() {
             EguiPlugin,
             HttpClientPlugin,
         ))
-        .init_resource::<Images>()
         .insert_resource(resources::PlayerSettings {
             username: String::new(),
         })
         .init_state::<GameState>()
         .add_systems(Startup, setup)
-        .add_systems(
-            Update,
-            room_creation_scenes.run_if(in_state(GameState::RoomCreation)),
-        )
-        .add_systems(Update, intro_systems)
         .register_request_type::<PostInfo>()
         .register_request_type::<IpInfo>()
         .add_systems(
@@ -65,8 +57,11 @@ fn main() {
                 send_ip_request.run_if(on_timer(std::time::Duration::from_secs(3))),
             ),
         )
-        .add_systems(Update, (handle_response, handle_ip_response, handle_error))
-        .run();
+        .add_systems(Update, (handle_response, handle_ip_response, handle_error));
+
+    add_intro_scene_logic(&mut app);
+
+    app.run();
 }
 
 fn setup(mut commands: Commands) {

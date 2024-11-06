@@ -26,7 +26,6 @@ fn main() {
         .insert_resource(resources::PlayerSettings {
             username: String::new(),
         })
-        .init_state::<GameState>()
         .add_systems(Startup, setup);
 
     add_scenes(&mut app);

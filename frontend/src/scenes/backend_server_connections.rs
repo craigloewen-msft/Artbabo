@@ -9,26 +9,28 @@ fn handle_error(mut ev_error: EventReader<HttpResponseError>) {
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
-pub struct IpInfo {
-    pub ip: String,
+pub struct User {
+    name: String,
+    age: u8,
+    alive: bool,
 }
 
-pub fn send_ip_request(mut ev_request: EventWriter<TypedRequest<IpInfo>>) {
+pub fn send_ip_request(mut ev_request: EventWriter<TypedRequest<User>>) {
     info!("Sending ip request");
     ev_request.send(
         HttpClient::new()
-            .get("https://api.ipify.org?format=json")
-            .with_type::<IpInfo>(),
+            .get("http://localhost:8000/api/test")
+            .with_type::<User>(),
     );
 }
 
-fn handle_ip_response(mut ev_response: EventReader<TypedResponse<IpInfo>>) {
+fn handle_ip_response(mut ev_response: EventReader<TypedResponse<User>>) {
     for response in ev_response.read() {
-        info!("ip: {}", response.ip);
+        info!("ip: {}", response.name);
     }
 }
 
 pub fn add_backend_server_connections(app: &mut App) {
-        app.register_request_type::<IpInfo>()
+        app.register_request_type::<User>()
         .add_systems(Update, (handle_ip_response, handle_error));
 }

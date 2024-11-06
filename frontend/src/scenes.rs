@@ -1,6 +1,12 @@
-use bevy::prelude::*;
+use std::time::Duration;
+
+use bevy::{
+    ecs::{system::SystemState, world::CommandQueue},
+    prelude::*,
+    tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task},
+};
 use bevy_egui::{
-    egui::{self, Align2, Color32, FontId, RichText},
+    egui::{self, Align2},
     EguiContexts,
 };
 
@@ -31,12 +37,19 @@ impl FromWorld for Images {
 }
 
 // === Intro scenes ===
+
+#[derive(Component)]
+struct IntroSceneTasks(Task<CommandQueue>);
+
 pub fn draw_intro_ui(
     mut contexts: EguiContexts,
     mut input_text: Local<String>,
     mut player_settings: ResMut<PlayerSettings>,
+    mut commands: Commands,
 ) {
-    if (player_settings.username != "") {
+    let task_pool = AsyncComputeTaskPool::get();
+
+    if player_settings.username != "" {
         // Room option select screen
         egui::Area::new("welcome_area".into())
             .anchor(Align2::CENTER_TOP, (0., 200.))
@@ -48,13 +61,26 @@ pub fn draw_intro_ui(
                         let private_room = ui.button("Join private room");
 
                         if random_room.clicked() {
-                            info!("REQUESTING: Joining random room");
-                            if backend_server_connections::request_random_room() {
-                                info!("Joined random room");
-                            } else {
-                                warn!("Failed to join random room");
-                            }
+                            info!("Starting request to server");
+
+                            // let task_entity = commands.spawn_empty().id();
+                            // let task: Task<CommandQueue> = task_pool.spawn(async move {
+                            //     let duration = Duration::from_secs(1);
+                            //     async_std::task::sleep(duration).await;
+
+                            //     let mut command_queue = CommandQueue::default();
+
+                            //     command_queue.push(move |world: &mut World| {
+                            //         // remove task when it's done
+                            //         world.entity_mut(task_entity).despawn();
+                            //     });
+
+                            //     command_queue
+                            // });
+                            
+                            // commands.entity(task_entity).insert(IntroSceneTasks(task));
                         }
+
                         if private_room.clicked() {
                             info!("Joining private room");
                         }
@@ -80,7 +106,8 @@ pub fn draw_intro_ui(
     }
 }
 
-pub fn get_intro_system_methods() -> fn(EguiContexts, Local<String>, ResMut<PlayerSettings>) {
+pub fn get_intro_system_methods(
+) -> fn(EguiContexts, Local<String>, ResMut<PlayerSettings>, Commands) {
     draw_intro_ui
 }
 

@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 use bevy_http_client::prelude::*;
-use serde::Deserialize;
+
+pub mod backend_responses;
 
 fn handle_error(mut ev_error: EventReader<HttpResponseError>) {
     for error in ev_error.read() {
@@ -8,29 +9,29 @@ fn handle_error(mut ev_error: EventReader<HttpResponseError>) {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
-pub struct User {
-    name: String,
-    age: u8,
-    alive: bool,
-}
+pub fn send_random_room_creation_request(mut ev_request: EventWriter<TypedRequest<backend_responses::RoomCreationResponse>>, username: &str) {
+    info!("Sending random room creationg request");
 
-pub fn send_ip_request(mut ev_request: EventWriter<TypedRequest<User>>) {
-    info!("Sending ip request");
+    let room_creation_request = backend_responses::RoomCreationRequest {
+        username: username.to_string(),
+        room_id: "".to_string(),
+    };
+
     ev_request.send(
         HttpClient::new()
-            .get("http://localhost:8000/api/test")
-            .with_type::<User>(),
+            .post("http://localhost:8000/api/join_random_room")
+            .json(&room_creation_request)
+            .with_type::<backend_responses::RoomCreationResponse>(),
     );
 }
 
-fn handle_ip_response(mut ev_response: EventReader<TypedResponse<User>>) {
+fn handle_room_creation_response(mut ev_response: EventReader<TypedResponse<backend_responses::RoomCreationResponse>>) {
     for response in ev_response.read() {
-        info!("ip: {}", response.name);
+        info!("Room creation success: {}", response.success);
     }
 }
 
 pub fn add_backend_server_connections(app: &mut App) {
-        app.register_request_type::<User>()
-        .add_systems(Update, (handle_ip_response, handle_error));
+        app.register_request_type::<backend_responses::RoomCreationResponse>()
+        .add_systems(Update, (handle_room_creation_response, handle_error));
 }

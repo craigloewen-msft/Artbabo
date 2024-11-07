@@ -1,42 +1,45 @@
 #[macro_use]
 extern crate rocket;
+use std::path::Path;
+
+use backend_responses::*;
 use rocket::fs::FileServer;
 use rocket::serde::json::Json;
-use rocket::serde::Deserialize;
-use rocket::serde::Serialize;
+use rocket::response::status;
 use rocket::fairing::{Fairing, Info, Kind};
 use rocket::http::Header;
 use rocket::{Request, Response};
 
-#[derive(Serialize, Deserialize)]
-struct User {
-    name: String,
-    age: u8,
-    alive: bool,
-}
+mod backend_responses;
 
-#[get("/test")]
-fn test() -> Json<User> {
-    let user = User {
-        name: "Jon Snow".to_string(),
-        age: 21,
-        alive: true,
-    };
-    Json(user)
-}
-
-#[launch]
-fn rocket() -> _ {
-    rocket::build()
-        .attach(Cors)
-        .mount("/api", routes![test])
-        .mount("/", FileServer::from("./websitesrc"))
+#[post("/join_random_room", data = "<room_creation_request>")]
+fn test(room_creation_request: Json<RoomCreationRequest>) -> Json<RoomCreationResponse> {
+    let room_request = room_creation_request.into_inner();
+    println!("Received request: {:?}", room_request);
+    let response = RoomCreationResponse { success: true };
+    Json(response)
 }
 
 /// Catches all OPTION requests in order to get the CORS related Fairing triggered.
 #[options("/<_..>")]
-fn all_options() {
-    /* Intentionally left empty */
+fn all_options() -> status::NoContent {
+    status::NoContent
+}
+
+#[launch]
+fn rocket() -> _ {
+    let rocket_app = rocket::build()
+        .attach(Cors)
+        .mount("/api", routes![test, all_options]);
+
+    let file_server_path = "./websitesrc";
+
+    if Path::new(file_server_path).exists() {
+        rocket_app.mount("/", FileServer::from(file_server_path))
+    } else {
+        eprintln!("The file server path '{}' does not exist.", file_server_path);
+        rocket_app
+    } 
 }
 
 pub struct Cors;

@@ -44,7 +44,7 @@ pub fn draw_intro_ui(
     mut contexts: EguiContexts,
     mut input_text: Local<String>,
     mut player_settings: ResMut<PlayerSettings>,
-    ev_request: EventWriter<TypedRequest<User>>,
+    ev_request: EventWriter<TypedRequest<backend_server_connections::backend_responses::RoomCreationResponse>>,
 ) {
     if player_settings.username != "" {
         // Room option select screen
@@ -60,7 +60,7 @@ pub fn draw_intro_ui(
                         if random_room.clicked() {
                             info!("Starting request to server");
 
-                            send_ip_request(ev_request);
+                            send_random_room_creation_request(ev_request, player_settings.username.as_str());
                         }
                         if private_room.clicked() {
                             info!("Joining private room");

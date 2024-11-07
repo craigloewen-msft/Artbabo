@@ -4,4 +4,5 @@ Based on Jackbox's bidiots (Thanks Jackbox for the great games!) it's a rust bas
 
 ## Debugging
 
-Run `cd frontend && cargo watch -cx "run --target wasm32-unknown-unknown"` to debug frontend
+- Run `cd backend && cargo watch -x run` to debug backend
+- Run `cd frontend && cargo watch -cx "run --target wasm32-unknown-unknown"` to debug frontend

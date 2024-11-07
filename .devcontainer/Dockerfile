@@ -1,6 +1,7 @@
 FROM "mcr.microsoft.com/devcontainers/rust:1-1-bullseye"
 
 RUN cargo install wasm-server-runner
+RUN cargo install cargo-watch
 RUN rustup target install wasm32-unknown-unknown
 
 RUN apt update && \

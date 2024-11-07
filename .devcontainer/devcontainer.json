@@ -3,10 +3,5 @@
 {
 	"name": "Rust",
 	// Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
-	"dockerFile": "Dockerfile",
-
-	"runArgs": [
-    "--gpus",
-    "all"
-]
+	"dockerFile": "Dockerfile"
 }

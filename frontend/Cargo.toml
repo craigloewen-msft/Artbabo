@@ -7,7 +7,8 @@ edition = "2021"
 bevy = "0.14"
 bevy_egui = { version="0.28", default-features = false, features=["default_fonts", "render"]}
 serde = "1.0"
-bevy_client_server_events = "0.7.0"
+bevy_eventwork = { version = "0.9", default-features = false }
+bevy_eventwork_mod_websockets = "0.2"
 
 [profile.dev.package."*"]
 opt-level = 2

@@ -1,46 +1,49 @@
-use bevy::prelude::*;
-use bevy_client_server_events::{
-    client::{ConnectToServer, ReceiveFromServer, SendToServer},
-    client_server_events_plugin,
-    server::{ReceiveFromClient, SendToClient, StartServer},
-    NetworkConfig,
-};
+use bevy::{prelude::*, tasks::TaskPoolBuilder};
 
+use bevy_eventwork::{
+    managers::network_request::{AppNetworkResponseMessage, RequestMessage, Requester, Response},
+    ConnectionId, NetworkMessage,
+};
+use bevy_eventwork::{AppNetworkMessage, EventworkRuntime, NetworkData, NetworkEvent};
+use bevy_eventwork_mod_websockets::*;
 pub mod backend_responses;
 use backend_responses::*;
 
-pub fn send_random_room_creation_request(
-    mut room_creation_sender: EventWriter<SendToServer<RoomCreationRequest>>,
-    username: &str,
-) {
-    info!("Sending random room creationg request");
-
-    let room_creation_request = backend_responses::RoomCreationRequest {
-        username: username.to_string(),
-        room_id: "".to_string(),
-    };
-
-    room_creation_sender.send(SendToServer {
-        content: room_creation_request,
-    });
-}
-
-fn setup_client(mut connect_to_server: EventWriter<ConnectToServer>) {
-    connect_to_server.send(ConnectToServer::default()); // Connects to 127.0.0.1:5000 by default.
-}
-
-fn update_client(mut room_creation_response: EventReader<ReceiveFromServer<RoomCreationResponse>>) {
-    for response in room_creation_response.read() {
-        println!("Server Response: {:?}", response.content);
+fn handle_incoming_messages(mut new_messages: EventReader<NetworkData<RoomCreationResponse>>) {
+    for new_message in new_messages.read() {
+        info!("Received new message: {:?}", new_message);
     }
 }
 
+fn handle_network_events(mut new_network_events: EventReader<NetworkEvent>) {
+    for event in new_network_events.read() {
+        info!("Received event");
+        match event {
+            NetworkEvent::Connected(_) => {
+                info!("Connected to server!");
+            }
+
+            NetworkEvent::Disconnected(_) => {
+                info!("Disconnected from server!");
+            }
+            NetworkEvent::Error(err) => {
+                info!("Error!");
+            }
+        }
+    }
+}
+
+
 pub fn add_backend_server_connections(app: &mut App) {
-    client_server_events_plugin!(
-        app,
-        RoomCreationRequest => NetworkConfig::default(),
-        RoomCreationResponse => NetworkConfig::default()
-    );
-    app.add_systems(Startup, setup_client)
-        .add_systems(Update, update_client);
+    info!("Building backend server connections");
+    app.add_plugins(bevy_eventwork::EventworkPlugin::<
+            WebSocketProvider,
+            bevy::tasks::TaskPool,
+        >::default())
+        .listen_for_message::<RoomCreationResponse, WebSocketProvider>()
+        .insert_resource(EventworkRuntime(
+            TaskPoolBuilder::new().num_threads(2).build(),
+        ))
+        .insert_resource(NetworkSettings::default())
+         .add_systems(Update, (handle_incoming_messages, handle_network_events));
 }

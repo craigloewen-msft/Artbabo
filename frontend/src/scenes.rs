@@ -1,12 +1,6 @@
 use std::time::Duration;
 
 use backend_responses::RoomCreationRequest;
-use bevy_client_server_events::{
-    client::{ConnectToServer, ReceiveFromServer, SendToServer},
-    client_server_events_plugin,
-    server::{ReceiveFromClient, SendToClient, StartServer},
-    NetworkConfig,
-};
 use bevy::{
     ecs::{system::SystemState, world::CommandQueue},
     prelude::*,
@@ -50,7 +44,7 @@ pub fn draw_intro_ui(
     mut contexts: EguiContexts,
     mut input_text: Local<String>,
     mut player_settings: ResMut<PlayerSettings>,
-    ev_request: EventWriter<SendToServer<RoomCreationRequest>>,
+    // ev_request: EventWriter<SendToServer<RoomCreationRequest>>,
 ) {
     if player_settings.username != "" {
         // Room option select screen
@@ -66,7 +60,7 @@ pub fn draw_intro_ui(
                         if random_room.clicked() {
                             info!("Starting request to server");
 
-                            send_random_room_creation_request(ev_request, player_settings.username.as_str());
+                            // send_random_room_creation_request(ev_request, player_settings.username.as_str());
                         }
                         if private_room.clicked() {
                             info!("Joining private room");

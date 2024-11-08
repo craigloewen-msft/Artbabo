@@ -1,15 +1,11 @@
-use bevy::log::LogPlugin;
+use bevy::{log::LogPlugin, tasks::TaskPool};
 use bevy::prelude::*;
 use bevy::tasks::TaskPoolBuilder;
-use bevy::{app::ScheduleRunnerPlugin, log::Level};
-use bevy_eventwork::{AppNetworkMessage, EventworkRuntime, NetworkData, NetworkEvent};
-use serde::{Deserialize, Serialize};
+use bevy::log::Level;
+use bevy_eventwork::{AppNetworkMessage, EventworkRuntime, Network, NetworkData, NetworkEvent};
 
-use bevy_eventwork::{
-    managers::network_request::{AppNetworkResponseMessage, RequestMessage, Requester, Response},
-    tcp::TcpProvider,
-    ConnectionId, NetworkMessage,
-};
+use std::net::{IpAddr, SocketAddr};
+use core::net::Ipv4Addr;
 
 use bevy_eventwork_mod_websockets::*;
 
@@ -29,37 +25,57 @@ fn main() {
         })
         .add_plugins(bevy_eventwork::EventworkPlugin::<
             WebSocketProvider,
-            bevy::tasks::TaskPool,
+            TaskPool,
         >::default())
         .listen_for_message::<RoomCreationResponse, WebSocketProvider>()
         .insert_resource(EventworkRuntime(
             TaskPoolBuilder::new().num_threads(2).build(),
         ))
         .insert_resource(NetworkSettings::default())
-        .add_systems(Update, (handle_incoming_messages, handle_network_events))
+        .add_systems(Startup, setup_networking)
+        .add_systems(Update, (handle_connection_events))
         .run();
 }
 
-fn handle_incoming_messages(mut new_messages: EventReader<NetworkData<RoomCreationResponse>>) {
-    for new_message in new_messages.read() {
-        info!("Received new message: {:?}", new_message);
+// at any time.
+fn setup_networking(
+    mut net: ResMut<Network<WebSocketProvider>>,
+    settings: Res<NetworkSettings>,
+    task_pool: Res<EventworkRuntime<TaskPool>>,
+) {
+    let ip_address = "127.0.0.1".parse().expect("Could not parse ip address");
+
+    info!("Address of the server: {}", ip_address);
+
+    let _socket_address = SocketAddr::new(ip_address, 9999);
+
+    match net.listen(
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8081),
+        &task_pool.0,
+        &settings,
+    ) {
+        Ok(_) => (),
+        Err(err) => {
+            error!("Could not start listening: {}", err);
+            panic!();
+        }
     }
+
+    info!("Started listening for new connections!");
 }
 
-fn handle_network_events(mut new_network_events: EventReader<NetworkEvent>) {
-    for event in new_network_events.read() {
-        info!("Received event");
-        match event {
-            NetworkEvent::Connected(_) => {
-                info!("Connected to server!");
-            }
+fn handle_connection_events(
+    mut commands: Commands,
+    net: Res<Network<WebSocketProvider>>,
+    mut network_events: EventReader<NetworkEvent>,
+) {
+    for event in network_events.read() {
+        if let NetworkEvent::Connected(conn_id) = event {
+            info!("New player connected: {}", conn_id);
 
-            NetworkEvent::Disconnected(_) => {
-                info!("Disconnected from server!");
-            }
-            NetworkEvent::Error(err) => {
-                info!("Error!");
-            }
+            net.broadcast(RoomCreationResponse {
+                success: true,
+            });
         }
     }
 }

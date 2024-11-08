@@ -211,6 +211,7 @@ dependencies = [
  "bevy_eventwork",
  "bevy_eventwork_mod_websockets",
  "serde",
+ "url",
 ]
 
 [[package]]

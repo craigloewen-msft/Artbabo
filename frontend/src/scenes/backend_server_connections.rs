@@ -1,9 +1,5 @@
 use bevy::{prelude::*, tasks::TaskPoolBuilder};
 
-use bevy_eventwork::{
-    managers::network_request::{AppNetworkResponseMessage, RequestMessage, Requester, Response},
-    ConnectionId, NetworkMessage,
-};
 use bevy_eventwork::{AppNetworkMessage, EventworkRuntime, NetworkData, NetworkEvent};
 use bevy_eventwork_mod_websockets::*;
 pub mod backend_responses;
@@ -46,4 +42,5 @@ pub fn add_backend_server_connections(app: &mut App) {
         ))
         .insert_resource(NetworkSettings::default())
          .add_systems(Update, (handle_incoming_messages, handle_network_events));
+    info!("Server connections built");
 }

@@ -10,9 +10,7 @@ serde = "1.0"
 bevy_eventwork = { version = "0.9", default-features = false }
 bevy_eventwork_mod_websockets = "0.2"
 url = "2.5.3"
+server_responses = { path = "../server_responses" }
 
 [profile.dev.package."*"]
 opt-level = 2
-
-[workspace]
-resolver = "2"

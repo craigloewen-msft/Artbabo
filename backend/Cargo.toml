@@ -10,3 +10,4 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 bevy_eventwork = "0.9"
 bevy_eventwork_mod_websockets = "0.2.0"
+server_responses = { path = "../server_responses" }

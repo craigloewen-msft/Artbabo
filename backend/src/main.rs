@@ -9,9 +9,8 @@ use core::net::Ipv4Addr;
 
 use bevy_eventwork_mod_websockets::*;
 
-mod backend_responses;
-
-use backend_responses::*;
+extern crate server_responses;
+use server_responses::*;
 
 fn main() {
     info!("Building app");

@@ -2,8 +2,7 @@ use bevy::{prelude::*, tasks::TaskPoolBuilder};
 
 use bevy_eventwork::{AppNetworkMessage, EventworkRuntime, NetworkData, NetworkEvent};
 use bevy_eventwork_mod_websockets::*;
-pub mod backend_responses;
-use backend_responses::*;
+use server_responses::*;
 
 fn handle_incoming_messages(mut new_messages: EventReader<NetworkData<RoomCreationResponse>>) {
     for new_message in new_messages.read() {

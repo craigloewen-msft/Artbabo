@@ -1,15 +1,18 @@
 use bevy::prelude::*;
-use bevy_http_client::prelude::*;
+use bevy_client_server_events::{
+    client::{ConnectToServer, ReceiveFromServer, SendToServer},
+    client_server_events_plugin,
+    server::{ReceiveFromClient, SendToClient, StartServer},
+    NetworkConfig,
+};
 
 pub mod backend_responses;
+use backend_responses::*;
 
-fn handle_error(mut ev_error: EventReader<HttpResponseError>) {
-    for error in ev_error.read() {
-        error!("Error doing request{}", error.err);
-    }
-}
-
-pub fn send_random_room_creation_request(mut ev_request: EventWriter<TypedRequest<backend_responses::RoomCreationResponse>>, username: &str) {
+pub fn send_random_room_creation_request(
+    mut room_creation_sender: EventWriter<SendToServer<RoomCreationRequest>>,
+    username: &str,
+) {
     info!("Sending random room creationg request");
 
     let room_creation_request = backend_responses::RoomCreationRequest {
@@ -17,21 +20,27 @@ pub fn send_random_room_creation_request(mut ev_request: EventWriter<TypedReques
         room_id: "".to_string(),
     };
 
-    ev_request.send(
-        HttpClient::new()
-            .post("http://localhost:8000/api/join_random_room")
-            .json(&room_creation_request)
-            .with_type::<backend_responses::RoomCreationResponse>(),
-    );
+    room_creation_sender.send(SendToServer {
+        content: room_creation_request,
+    });
 }
 
-fn handle_room_creation_response(mut ev_response: EventReader<TypedResponse<backend_responses::RoomCreationResponse>>) {
-    for response in ev_response.read() {
-        info!("Room creation success: {}", response.success);
+fn setup_client(mut connect_to_server: EventWriter<ConnectToServer>) {
+    connect_to_server.send(ConnectToServer::default()); // Connects to 127.0.0.1:5000 by default.
+}
+
+fn update_client(mut room_creation_response: EventReader<ReceiveFromServer<RoomCreationResponse>>) {
+    for response in room_creation_response.read() {
+        println!("Server Response: {:?}", response.content);
     }
 }
 
 pub fn add_backend_server_connections(app: &mut App) {
-        app.register_request_type::<backend_responses::RoomCreationResponse>()
-        .add_systems(Update, (handle_room_creation_response, handle_error));
+    client_server_events_plugin!(
+        app,
+        RoomCreationRequest => NetworkConfig::default(),
+        RoomCreationResponse => NetworkConfig::default()
+    );
+    app.add_systems(Startup, setup_client)
+        .add_systems(Update, update_client);
 }

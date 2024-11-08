@@ -1,65 +1,65 @@
-#[macro_use]
-extern crate rocket;
-use std::path::Path;
+use bevy::log::LogPlugin;
+use bevy::prelude::*;
+use bevy::tasks::TaskPoolBuilder;
+use bevy::{app::ScheduleRunnerPlugin, log::Level};
+use bevy_eventwork::{AppNetworkMessage, EventworkRuntime, NetworkData, NetworkEvent};
+use serde::{Deserialize, Serialize};
 
-use backend_responses::*;
-use rocket::fs::FileServer;
-use rocket::serde::json::Json;
-use rocket::response::status;
-use rocket::fairing::{Fairing, Info, Kind};
-use rocket::http::Header;
-use rocket::{Request, Response};
+use bevy_eventwork::{
+    managers::network_request::{AppNetworkResponseMessage, RequestMessage, Requester, Response},
+    tcp::TcpProvider,
+    ConnectionId, NetworkMessage,
+};
+
+use bevy_eventwork_mod_websockets::*;
 
 mod backend_responses;
 
-#[post("/join_random_room", data = "<room_creation_request>")]
-fn test(room_creation_request: Json<RoomCreationRequest>) -> Json<RoomCreationResponse> {
-    let room_request = room_creation_request.into_inner();
-    println!("Received request: {:?}", room_request);
-    let response = RoomCreationResponse { success: true };
-    Json(response)
+use backend_responses::*;
+
+fn main() {
+    info!("Building app");
+    let mut app = App::new();
+
+    app.add_plugins(MinimalPlugins)
+        .add_plugins(LogPlugin {
+            level: Level::DEBUG,
+            filter: "wgpu=error,bevy_render=info,bevy_ecs=trace".to_string(),
+            custom_layer: |_| None,
+        })
+        .add_plugins(bevy_eventwork::EventworkPlugin::<
+            WebSocketProvider,
+            bevy::tasks::TaskPool,
+        >::default())
+        .listen_for_message::<RoomCreationResponse, WebSocketProvider>()
+        .insert_resource(EventworkRuntime(
+            TaskPoolBuilder::new().num_threads(2).build(),
+        ))
+        .insert_resource(NetworkSettings::default())
+        .add_systems(Update, (handle_incoming_messages, handle_network_events))
+        .run();
 }
 
-/// Catches all OPTION requests in order to get the CORS related Fairing triggered.
-#[options("/<_..>")]
-fn all_options() -> status::NoContent {
-    status::NoContent
-}
-
-#[launch]
-fn rocket() -> _ {
-    let rocket_app = rocket::build()
-        .attach(Cors)
-        .mount("/api", routes![test, all_options]);
-
-    let file_server_path = "./websitesrc";
-
-    if Path::new(file_server_path).exists() {
-        rocket_app.mount("/", FileServer::from(file_server_path))
-    } else {
-        eprintln!("The file server path '{}' does not exist.", file_server_path);
-        rocket_app
-    } 
-}
-
-pub struct Cors;
-
-#[rocket::async_trait]
-impl Fairing for Cors {
-    fn info(&self) -> Info {
-        Info {
-            name: "Cross-Origin-Resource-Sharing Fairing",
-            kind: Kind::Response,
-        }
+fn handle_incoming_messages(mut new_messages: EventReader<NetworkData<RoomCreationResponse>>) {
+    for new_message in new_messages.read() {
+        info!("Received new message: {:?}", new_message);
     }
+}
 
-    async fn on_response<'r>(&self, _request: &'r Request<'_>, response: &mut Response<'r>) {
-        response.set_header(Header::new("Access-Control-Allow-Origin", "*"));
-        response.set_header(Header::new(
-            "Access-Control-Allow-Methods",
-            "POST, PATCH, PUT, DELETE, HEAD, OPTIONS, GET",
-        ));
-        response.set_header(Header::new("Access-Control-Allow-Headers", "*"));
-        response.set_header(Header::new("Access-Control-Allow-Credentials", "true"));
+fn handle_network_events(mut new_network_events: EventReader<NetworkEvent>) {
+    for event in new_network_events.read() {
+        info!("Received event");
+        match event {
+            NetworkEvent::Connected(_) => {
+                info!("Connected to server!");
+            }
+
+            NetworkEvent::Disconnected(_) => {
+                info!("Disconnected from server!");
+            }
+            NetworkEvent::Error(err) => {
+                info!("Error!");
+            }
+        }
     }
 }

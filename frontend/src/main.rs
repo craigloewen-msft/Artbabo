@@ -1,6 +1,5 @@
 use bevy::{prelude::*, render::camera::ScalingMode, time::common_conditions::on_timer};
 use bevy_egui::EguiPlugin;
-use bevy_http_client::prelude::*;
 
 mod scenes;
 use scenes::{add_scenes, GameState, Images};
@@ -21,7 +20,6 @@ fn main() {
                 ..default()
             }),
             EguiPlugin,
-            HttpClientPlugin,
         ))
         .insert_resource(resources::PlayerSettings {
             username: String::new(),

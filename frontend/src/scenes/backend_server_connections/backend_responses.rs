@@ -1,13 +1,14 @@
 use serde::Deserialize;
 use serde::Serialize;
+use bevy::prelude::*;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Event, Clone, Serialize, Deserialize, Default)]
 pub struct RoomCreationRequest {
     pub username: String,
     pub room_id: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Event, Clone, Serialize, Deserialize, Default)]
 pub struct RoomCreationResponse {
     pub success: bool,
 }

@@ -305,7 +305,7 @@ pub fn draw_round_1_ui(
     match task_executor.poll() {
         AsyncTaskStatus::Idle => {
             if !*is_image_loaded {
-                let url = "https://static.vecteezy.com/system/resources/thumbnails/018/871/729/small_2x/cute-and-happy-dog-png.png".to_string();
+                let url = room_state.current_art_bid.image_url.clone();
                 // Spawn an async task to download the image
                 task_executor.start(async move {
                     info!("Started image loading");
@@ -340,8 +340,7 @@ pub fn draw_round_1_ui(
                 });
             }
         }
-        AsyncTaskStatus::Pending => {
-        }
+        AsyncTaskStatus::Pending => {}
         AsyncTaskStatus::Finished(returned_image_option) => {
             if let Some(returned_image) = returned_image_option {
                 let image_handle = asset_server.add(returned_image.clone());
@@ -351,7 +350,7 @@ pub fn draw_round_1_ui(
                 commands.spawn(SpriteBundle {
                     texture: images.current_bid_image.clone(),
                     sprite: Sprite {
-                        custom_size: Some(Vec2::new(1., 1.)),
+                        custom_size: Some(Vec2::new(85., 85.)),
                         ..default()
                     },
                     ..Default::default()
@@ -363,26 +362,33 @@ pub fn draw_round_1_ui(
     egui::Area::new("round_area".into())
         .anchor(Align2::CENTER_TOP, (0., 0.))
         .show(contexts.ctx_mut(), |ui| {
-            ui.vertical(|ui| {
+            ui.horizontal(|ui| {
                 // Show timer information at top
-                ui.label("Time left: ");
-                ui.label(format!("{:.2}", round_timer.0.remaining_secs()));
+                ui.vertical(|ui| {
+                    ui.label("Time left: ");
+                    ui.label(format!("{:.2}", round_timer.0.remaining_secs()));
+                });
 
-                ui.label("Current art: ");
-                ui.label(room_state.current_art_bid.image_url.clone());
+                ui.vertical(|ui| {
+                    ui.label("Current bid:");
+                    ui.label(format!("{}", room_state.current_art_bid.max_bid));
+                });
 
-                ui.label(format!(
-                    "Current bid: {}",
-                    room_state.current_art_bid.max_bid
-                ));
-                ui.label(format!(
-                    "Bid increase: {}",
-                    room_state.current_art_bid.bid_increase_amount
-                ));
-                ui.label(format!(
-                    "Owner: {}",
-                    room_state.current_art_bid.owner_player_id
-                ));
+                let current_bid_owner = room_state
+                    .players
+                    .iter()
+                    .find(|player| player.id == room_state.current_art_bid.owner_player_id);
+
+                ui.vertical(|ui| {
+                    ui.label("Current owner:");
+                    if let Some(owner) = current_bid_owner {
+                        if room_state.current_art_bid.max_bid > 0 {
+                            ui.label(format!("{}", owner.username));
+                        } else {
+                            ui.label("No owner");
+                        }
+                    }
+                });
 
                 let button = ui.add_enabled(true, egui::Button::new("Bid"));
 

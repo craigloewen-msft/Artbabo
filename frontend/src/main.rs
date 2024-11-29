@@ -6,6 +6,8 @@ use scenes::add_scenes;
 mod resources;
 use server_responses::*;
 
+const SCREEN_SCALING_SIZE: f32 = 100.0;
+
 fn main() {
     let mut app = App::new();
 
@@ -41,7 +43,7 @@ fn main() {
 
 fn setup(mut commands: Commands) {
     let mut camera_bundle = Camera2dBundle::default();
-    camera_bundle.projection.scaling_mode = ScalingMode::FixedVertical(10.);
+    camera_bundle.projection.scaling_mode = ScalingMode::FixedVertical(SCREEN_SCALING_SIZE);
     commands.spawn(camera_bundle);
 }
 
@@ -54,9 +56,9 @@ fn update_camera_scaling(
 
         for mut projection in query.iter_mut() {
             if aspect_ratio > 1.0 {
-                projection.scaling_mode = ScalingMode::FixedVertical(10.0);
+                projection.scaling_mode = ScalingMode::FixedVertical(SCREEN_SCALING_SIZE);
             } else {
-                projection.scaling_mode = ScalingMode::FixedHorizontal(10.0);
+                projection.scaling_mode = ScalingMode::FixedHorizontal(SCREEN_SCALING_SIZE);
             }
         }
     }

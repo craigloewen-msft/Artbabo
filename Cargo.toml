@@ -1,0 +1,6 @@
+[workspace]
+members = ["backend", "frontend", "server_responses"]
+resolver = "2"
+
+[profile.dev.package."*"]
+opt-level = 2

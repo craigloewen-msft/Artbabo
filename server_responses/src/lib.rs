@@ -4,8 +4,8 @@ use serde::Deserialize;
 use serde::Serialize;
 
 pub const IMAGE_CREATION_TIME: f32 = 120.0;
-pub const ROUND_1_TIME: f32 = 120.0;
-pub const ROUND_2_TIME: f32 = 120.0;
+pub const BIDDING_ROUND_TIME: f32 = 10.0;
+pub const BIDDING_ROUND_END_TIME: f32 = 5.0;
 
 #[derive(Component, Resource)]
 pub struct RoundTimer(pub Timer);
@@ -21,17 +21,16 @@ pub enum GameState {
     WaitingRoom,
     ImageCreation,
     ImageGeneration,
-    Round1,
-    Round2,
+    BiddingRound,
+    BiddingRoundEnd,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Player {
     pub username: String,
+    #[serde(skip)]
     pub money: u32,
     pub id: u32,
-    #[serde(skip)]
-    pub prompt_data: PromptInfoDataList,
 }
 
 // Make a constructor for Player with a string input
@@ -41,16 +40,13 @@ impl Player {
             username,
             money: 3000,
             id,
-            prompt_data: PromptInfoDataList::default(),
         }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ArtBidInfo {
-    pub image_url: String,
-    pub owner_player_id: u32,
-    pub owner_prompt_number: u32,
+    pub prompt_info: PromptInfoData,
     pub max_bid: u32,
     pub max_bid_player_id: u32,
     pub bid_increase_amount: u32,
@@ -62,7 +58,12 @@ pub struct RoomState {
     pub room_id: u32,
     pub players: Vec<Player>,
     pub game_state: GameState,
-    pub current_art_bid: ArtBidInfo
+    pub current_art_bid: ArtBidInfo,
+    pub prompts_per_player: u32,
+    #[serde(skip)]
+    pub remaining_prompts: Vec<PromptInfoData>,
+    pub used_prompts: Vec<PromptInfoData>,
+    pub received_prompt_count: u32,
 }
 
 impl NetworkMessage for RoomState {
@@ -101,34 +102,35 @@ impl HasRoomId for StartGameRequest {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PromptInfoData {
     pub prompt_text: String,
     pub prompt_answer: String,
-    pub prompt_image_url: String,
+    pub image_url: String,
+    pub owner_id: u32,
 }
 
 #[derive(Debug, Event, Clone, Serialize, Deserialize, Resource, Default)]
-pub struct PromptInfoDataList {
+pub struct PromptInfoDataRequest {
     pub prompt_list: Vec<PromptInfoData>,
     pub room_id: u32,
 }
 
-impl PromptInfoDataList {
+impl HasRoomId for PromptInfoDataRequest {
+    fn room_id(&self) -> u32 {
+        self.room_id
+    }
+}
+
+impl PromptInfoDataRequest {
     // Need this due to the networking event system not showing clone well
     pub fn additional_clone(&self) -> Self {
         self.clone()
     }
 }
 
-impl NetworkMessage for PromptInfoDataList {
-    const NAME: &'static str = "PromptInfoDataList";
-}
-
-impl HasRoomId for PromptInfoDataList {
-    fn room_id(&self) -> u32 {
-        self.room_id
-    }
+impl NetworkMessage for PromptInfoDataRequest {
+    const NAME: &'static str = "PromptInfoDataRequest";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

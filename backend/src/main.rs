@@ -28,6 +28,8 @@ use bevy_eventwork_mod_websockets::*;
 extern crate server_responses;
 use server_responses::*;
 
+const DEBUG_MODE: bool = true;
+
 #[derive(Component)]
 struct PublicRoom;
 
@@ -40,11 +42,10 @@ struct ImageGenerationInfo {
     api_key: String,
 }
 
-#[derive(Component)]
+#[derive(Debug, Component)]
 struct ImageGenerationTask {
     task: Task<Option<String>>,
-    prompt_number: usize,
-    player_id: u32,
+    prompt_to_complete: PromptInfoData,
     status: TaskCompletionStatus,
 }
 
@@ -79,7 +80,7 @@ fn main() {
         .add_systems(Update, room_join_request)
         .listen_for_message::<StartGameRequest, WebSocketProvider>()
         .add_systems(Update, start_game_request)
-        .listen_for_message::<PromptInfoDataList, WebSocketProvider>()
+        .listen_for_message::<PromptInfoDataRequest, WebSocketProvider>()
         .add_systems(Update, prompt_info_data_update)
         .listen_for_message::<GameActionRequest, WebSocketProvider>()
         .add_systems(Update, game_action_request_update)
@@ -92,10 +93,18 @@ async fn get_image_url(input_string: String, url: String, api_key: String) -> Op
     // Simulate a long-running task
     info!("Starting image generation task");
 
-    // SLeep a random time
-    let sleep_time = rand::random::<u64>() % 8;
-    std::thread::sleep(std::time::Duration::from_secs(sleep_time));
-    return Some("https://i.ebayimg.com/images/g/JPUAAOSw0n5lBnhv/s-l1200.jpg".to_string());
+    if DEBUG_MODE {
+        // SLeep a random time
+        // let sleep_time = rand::random::<u64>() % 1;
+        // std::thread::sleep(std::time::Duration::from_secs(sleep_time));
+
+        let random_image_list = vec![
+            "https://dalleproduse.blob.core.windows.net/private/images/4756af2f-c07e-40b9-abff-06184957db4a/generated_00.png?se=2024-11-30T22%3A05%3A37Z&sig=e2W8tJT6DwB3JY10VSV%2BR8mP2SHkKH4oWawoNbe8gvU%3D&ske=2024-12-06T07%3A57%3A19Z&skoid=09ba021e-c417-441c-b203-c81e5dcd7b7f&sks=b&skt=2024-11-29T07%3A57%3A19Z&sktid=33e01921-4d64-4f8c-a055-5bdaffd5e33d&skv=2020-10-02&sp=r&spr=https&sr=b&sv=2020-10-02",
+            "https://i.ebayimg.com/images/g/JPUAAOSw0n5lBnhv/s-l1200.jpg",
+        ];
+
+        return Some(random_image_list.choose(&mut thread_rng()).unwrap().to_string());
+    }
 
     let client = Client::new();
 
@@ -172,25 +181,25 @@ fn update_room_state_for_all_players(
     Ok(())
 }
 
-fn update_prompts_for_all_players(
-    room_state: &RoomState,
-    net: &Res<Network<WebSocketProvider>>,
-) -> Result<(), String> {
-    for player in room_state.players.iter() {
-        match net.send_message(ConnectionId { id: player.id }, player.prompt_data.clone()) {
-            Ok(_) => info!(
-                "Sent prompt info to {} with id {}",
-                player.username, player.id
-            ),
-            Err(e) => {
-                error!("Failed to send message: {:?}", e);
-                return Err(format!("Failed to send message: {:?}", e));
-            }
-        }
-    }
+// fn update_prompts_for_all_players(
+//     room_state: &RoomState,
+//     net: &Res<Network<WebSocketProvider>>,
+// ) -> Result<(), String> {
+//     for player in room_state.players.iter() {
+//         match net.send_message(ConnectionId { id: player.id }, player.prompt_data.clone()) {
+//             Ok(_) => info!(
+//                 "Sent prompt info to {} with id {}",
+//                 player.username, player.id
+//             ),
+//             Err(e) => {
+//                 error!("Failed to send message: {:?}", e);
+//                 return Err(format!("Failed to send message: {:?}", e));
+//             }
+//         }
+//     }
 
-    Ok(())
-}
+//     Ok(())
+// }
 
 fn finalize_and_setup_new_round(room_state: &mut RoomState) {
     let current_art_bid_number = room_state.current_art_bid.art_bid_number;
@@ -200,7 +209,7 @@ fn finalize_and_setup_new_round(room_state: &mut RoomState) {
         let winning_player = room_state
             .players
             .iter_mut()
-            .find(|player| player.id == room_state.current_art_bid.owner_player_id);
+            .find(|player| player.id == room_state.current_art_bid.max_bid_player_id);
 
         match winning_player {
             Some(player) => {
@@ -210,40 +219,68 @@ fn finalize_and_setup_new_round(room_state: &mut RoomState) {
             None => {
                 error!(
                     "Could not find winning player with id {}",
-                    room_state.current_art_bid.owner_player_id
+                    room_state.current_art_bid.max_bid_player_id
                 );
             }
         }
+
+        let current_prompt_info = &room_state.current_art_bid.prompt_info;
+
+        // Award money to art creator
+        let art_creator = room_state
+            .players
+            .iter_mut()
+            .find(|player| player.id == current_prompt_info.owner_id);
+
+        match art_creator {
+            Some(player) => {
+                player.money += room_state.current_art_bid.max_bid;
+            }
+            None => {
+                error!(
+                    "Could not find art creator with id {}",
+                    current_prompt_info.owner_id
+                );
+            }
+        }
+
+        // Move the prompt to the completed list
+        room_state.used_prompts.push(std::mem::replace(
+            &mut room_state.current_art_bid.prompt_info,
+            PromptInfoData::default(),
+        ));
+
+        info!(
+            "After removing prompt, current prompt_list: {:?}",
+            room_state.remaining_prompts,
+        );
     }
 
-    // Prepare the next bid info
-    room_state.current_art_bid = ArtBidInfo::default();
-    room_state.current_art_bid.bid_increase_amount = 100;
-    room_state.current_art_bid.art_bid_number = current_art_bid_number + 1;
+    if !room_state.remaining_prompts.is_empty() {
+        // Prepare the next bid info
+        room_state.current_art_bid = ArtBidInfo::default();
+        room_state.current_art_bid.bid_increase_amount = 100;
+        room_state.current_art_bid.art_bid_number = current_art_bid_number + 1;
 
-    // Choose a random player and prompt number
-    let random_player = room_state.players.choose(&mut thread_rng()).unwrap();
-    let random_prompt_number =
-        rand::random::<u32>() % random_player.prompt_data.prompt_list.len() as u32;
+        // Prepare next round info
+        // Choose a random prompt
+        let random_prompt_number =
+            rand::random::<u32>() % room_state.remaining_prompts.len() as u32;
 
-    room_state.current_art_bid.owner_player_id = random_player.id;
-    room_state.current_art_bid.owner_prompt_number = random_prompt_number;
-    info!(
-        "Picked player {} and prompt number {} for new round in room {}",
-        random_player.id, random_prompt_number, room_state.room_id
-    );
+        // Remove the prompt from the remaining prompts and insert it into current art bid
+        let random_prompt = room_state
+            .remaining_prompts
+            .remove(random_prompt_number as usize);
+        room_state.current_art_bid.prompt_info = random_prompt;
 
-    if let Some(prompt_data) = random_player
-        .prompt_data
-        .prompt_list
-        .get(random_prompt_number as usize)
-    {
-        info!("Setting prompt image URL for player {} and prompt number {} to {}", random_player.id, random_prompt_number, prompt_data.prompt_image_url);
-        room_state.current_art_bid.image_url = prompt_data.prompt_image_url.clone();
-    } else {
-        error!(
-            "Failed to get image URL for player {} and prompt number {}",
-            random_player.id, random_prompt_number
+        info!(
+            "Picked prompt {:?} for next round in room {}",
+            room_state.current_art_bid.prompt_info, room_state.room_id
+        );
+
+        info!(
+            "After progressing to new round, current art bid info: {:?}",
+            room_state
         );
     }
 }
@@ -265,19 +302,24 @@ fn progress_round(
             info!("Progressed to image generation",);
         }
         GameState::ImageGeneration => {
-            room_state.game_state = GameState::Round1;
+            room_state.game_state = GameState::BiddingRound;
             finalize_and_setup_new_round(room_state);
-            timer.0 = Timer::from_seconds(ROUND_1_TIME, TimerMode::Once);
+            timer.0 = Timer::from_seconds(BIDDING_ROUND_TIME, TimerMode::Once);
             info!("Progressed to round 1");
         }
-        GameState::Round1 => {
-            room_state.game_state = GameState::Round2;
-            finalize_and_setup_new_round(room_state);
-            timer.0 = Timer::from_seconds(ROUND_2_TIME, TimerMode::Once);
+        GameState::BiddingRound => {
+            room_state.game_state = GameState::BiddingRoundEnd;
+            timer.0 = Timer::from_seconds(BIDDING_ROUND_END_TIME, TimerMode::Once);
         }
-        GameState::Round2 => {
-            room_state.game_state = GameState::Intro;
-            commands.entity(entity).remove::<RoundTimer>();
+        GameState::BiddingRoundEnd => {
+            if room_state.remaining_prompts.len() > 0 {
+                room_state.game_state = GameState::BiddingRound;
+                timer.0 = Timer::from_seconds(BIDDING_ROUND_TIME, TimerMode::Once);
+                finalize_and_setup_new_round(room_state);
+            } else {
+                room_state.game_state = GameState::Intro;
+                commands.entity(entity).remove::<RoundTimer>();
+            }
         }
         _ => {
             error!(
@@ -426,37 +468,30 @@ fn handle_image_generation_tasks(
     for (entity, mut room_state, mut timer, mut room_state_server_info) in query.iter_mut() {
         if room_state.game_state == GameState::ImageGeneration {
             for compute_task_info in room_state_server_info.task_list.iter_mut() {
-                if let Some(string_value) =
+                if let Some(string_option) =
                     future::block_on(future::poll_once(&mut compute_task_info.task))
                 {
-                    // Find the prompt that matches the task and set its image url
-                    if let Some(player) = room_state
-                        .players
-                        .iter_mut()
-                        .find(|player| player.id == compute_task_info.player_id)
-                    {
-                        if let Some(prompt) = player
-                            .prompt_data
-                            .prompt_list
-                            .get_mut(compute_task_info.prompt_number)
-                        {
-                            if let Some(image_url) = string_value {
-                                prompt.prompt_image_url = image_url;
-                                compute_task_info.status = TaskCompletionStatus::Completed;
-                            } else {
-                                error!("Failed to get image URL");
-                                compute_task_info.status = TaskCompletionStatus::Error;
-                            }
-                        } else {
-                            error!("Failed to get prompt");
-                            compute_task_info.status = TaskCompletionStatus::Error;
-                        }
+                    info!(
+                        "Handling result of image generation task: {:?}",
+                        compute_task_info
+                    );
+
+                    if let Some(string_value) = string_option {
+                        info!("Task completed successfully: {:?}", string_value);
+                        compute_task_info.prompt_to_complete.image_url = string_value.clone();
+                        compute_task_info.status = TaskCompletionStatus::Completed;
+
+                        // Add the prompt to the remaining prompts
+                        let completed_prompt =
+                            std::mem::take(&mut compute_task_info.prompt_to_complete);
+
+                        room_state.remaining_prompts.push(completed_prompt);
                     } else {
-                        error!("Failed to get player");
+                        error!("Task failed to complete: {:?}", compute_task_info);
                         compute_task_info.status = TaskCompletionStatus::Error;
+                        // TODO: Handle if error state fails
                     }
                 }
-                // TODO: Handle error state if the task fails
             }
             // Remove all finished tasks
             room_state_server_info
@@ -475,8 +510,6 @@ fn handle_image_generation_tasks(
                     &mut commands,
                     entity,
                 );
-
-                info!("ROom state before sending out to all players after image generation: {:?}", room_state);
 
                 // Send updated room state to all players
                 match update_room_state_for_all_players(room_state.deref_mut(), &net) {
@@ -535,6 +568,10 @@ fn room_join_request(
             )],
             game_state: GameState::WaitingRoom,
             current_art_bid: ArtBidInfo::default(),
+            prompts_per_player: 1,
+            remaining_prompts: vec![],
+            used_prompts: vec![],
+            received_prompt_count: 0,
         };
 
         let mut inserted_timer = Timer::from_seconds(5.0, TimerMode::Once);
@@ -585,30 +622,26 @@ fn start_game_request(
             // Add InGame component to game
             commands.entity(*entity).insert(InGame);
 
-            // Generate prompts for all players
-            for player in room_state.players.iter_mut() {
-                player.prompt_data = PromptInfoDataList {
-                    prompt_list: vec![
-                        PromptInfoData {
-                            prompt_text: "A dog holding a frisbee".to_string(),
-                            prompt_answer:
-                                "A furry four legged animal with ears and a tail holding a disk"
-                                    .to_string(),
-                            prompt_image_url: "https://i.ebayimg.com/images/g/JPUAAOSw0n5lBnhv/s-l1200.jpg".to_string(),
-                        },
-                        // PromptInfoData {
-                        //     prompt_text: "A cat playing with a ball of yarn".to_string(),
-                        //     prompt_answer: "Hello other World".to_string(),
-                        //     prompt_image_url: "".to_string(),
-                        // },
-                    ],
+            // Send initial prompts to all players
+            for player in room_state.players.iter() {
+                let new_prompt = PromptInfoDataRequest {
+                    prompt_list: vec![PromptInfoData {
+                        prompt_text: "A dog holding a frisbee".to_string(),
+                        prompt_answer: String::default(),
+                        image_url: String::default(),
+                        owner_id: player.id,
+                    }],
                     room_id: room_state.room_id,
+                };
+                match net.send_message(ConnectionId { id: player.id }, new_prompt) {
+                    Ok(_) => info!(
+                        "Sent prompt info to {} with id {}",
+                        player.username, player.id
+                    ),
+                    Err(e) => {
+                        error!("Failed to send message: {:?}", e);
+                    }
                 }
-            }
-
-            match update_prompts_for_all_players(room_state.deref_mut(), &net) {
-                Ok(_) => info!("Sent prompts to all players in room {}", room_state.room_id),
-                Err(e) => error!("Failed to send message: {:?}", e),
             }
 
             // Set game timer
@@ -623,7 +656,7 @@ fn start_game_request(
 }
 
 fn prompt_info_data_update(
-    new_messages: EventReader<NetworkData<PromptInfoDataList>>,
+    new_messages: EventReader<NetworkData<PromptInfoDataRequest>>,
     net: Res<Network<WebSocketProvider>>,
     mut commands: Commands,
     mut query: Query<(
@@ -645,12 +678,12 @@ fn prompt_info_data_update(
 
             for player in room_state.players.iter_mut() {
                 if player.id == incoming_connection_id {
-                    player.prompt_data = message.additional_clone();
-
-                    for (prompt_index, prompt) in player.prompt_data.prompt_list.iter().enumerate()
-                    {
+                    for (prompt_index, prompt) in message.prompt_list.iter().enumerate() {
                         if prompt.prompt_answer != "" {
                             info!("Generating image for prompt: {:?}", prompt);
+
+                            room_state.received_prompt_count += 1;
+
                             // Create a task to get the image URL for each prompt
                             let thread_pool = AsyncComputeTaskPool::get();
 
@@ -663,8 +696,7 @@ fn prompt_info_data_update(
                             });
                             room_state_server_info.task_list.push(ImageGenerationTask {
                                 task,
-                                prompt_number: prompt_index,
-                                player_id: player.id,
+                                prompt_to_complete: prompt.clone(),
                                 status: TaskCompletionStatus::InProgress,
                             });
                         }
@@ -672,19 +704,14 @@ fn prompt_info_data_update(
                 }
             }
 
-            // If all players have submitted their prompts (AKA each player has atleast one prompt answer without "") then set the next state
-            if room_state.players.iter().all(|player| {
-                player
-                    .prompt_data
-                    .prompt_list
-                    .iter()
-                    .all(|prompt| prompt.prompt_answer != "")
-            }) {
-                // TODO: Start image generation state
+            // If we have enough prompts, progress the round
+            if room_state.received_prompt_count == room_state.players.len() as u32 * room_state.prompts_per_player  {
                 progress_round(room_state, timer, &mut commands, *entity);
-
                 match update_room_state_for_all_players(room_state.deref_mut(), &net) {
-                    Ok(_) => info!("Received all prompts and now progressing in room {}", room_state.room_id),
+                    Ok(_) => info!(
+                        "Received all prompts and now progressing in room {}",
+                        room_state.room_id
+                    ),
                     Err(e) => error!("Failed to send message: {:?}", e),
                 }
             } else {
@@ -736,12 +763,14 @@ fn game_action_request_update(
                     match message.action {
                         GameAction::Bid => {
                             info!("Player trying to bid on art");
-                            let new_bid_amount = room_state.current_art_bid.max_bid
-                                + room_state.current_art_bid.bid_increase_amount;
-                            if player.money >= new_bid_amount {
-                                info!("Player {} bid {}", player.id, new_bid_amount);
-                                room_state.current_art_bid.owner_player_id = player.id;
-                                room_state.current_art_bid.max_bid = new_bid_amount;
+                            if room_state.game_state == GameState::BiddingRound {
+                                let new_bid_amount = room_state.current_art_bid.max_bid
+                                    + room_state.current_art_bid.bid_increase_amount;
+                                if player.money >= new_bid_amount {
+                                    info!("Player {} bid {}", player.id, new_bid_amount);
+                                    room_state.current_art_bid.max_bid_player_id = player.id;
+                                    room_state.current_art_bid.max_bid = new_bid_amount;
+                                }
                             }
                         }
                         GameAction::EndRound => {

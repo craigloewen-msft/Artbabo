@@ -29,7 +29,7 @@ fn main() {
         button_submitted: false,
     })
     .insert_resource(resources::CurrentPlayerData { player_id: 0 })
-    .insert_resource(PromptInfoDataList::default())
+    .insert_resource(PromptInfoDataRequest::default())
     .insert_resource(RoundTimer(Timer::from_seconds(5.0, TimerMode::Once)))
     .add_systems(Startup, setup)
     .add_systems(Update, update_camera_scaling)

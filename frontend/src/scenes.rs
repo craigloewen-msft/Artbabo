@@ -28,8 +28,11 @@ use std::io::Cursor;
 // === Assets ===
 #[derive(Resource, Debug, Default)]
 pub struct Images {
-    current_bid_image: Handle<Image>,
+    current_bid_image: Option<Handle<Image>>,
 }
+
+#[derive(Component)]
+pub struct BidImage;
 
 // impl FromWorld for Images {
 //     fn from_world(world: &mut World) -> Self {
@@ -41,63 +44,6 @@ pub struct Images {
 // }
 
 // === Helper functions ===
-
-fn draw_round_ui(
-    contexts: &mut EguiContexts,
-    room_state: &RoomState,
-    round_timer: &RoundTimer,
-    current_player_data: &CurrentPlayerData,
-    net: &Network<WebSocketProvider>,
-) {
-    egui::Area::new("round_area".into())
-        .anchor(Align2::CENTER_TOP, (0., 0.))
-        .show(contexts.ctx_mut(), |ui| {
-            ui.vertical(|ui| {
-                // Show timer information at top
-                ui.label("Time left: ");
-                ui.label(format!("{:.2}", round_timer.0.remaining_secs()));
-
-                ui.label("Current art: ");
-                ui.label(room_state.current_art_bid.image_url.clone());
-                ui.label(format!(
-                    "Current bid: {}",
-                    room_state.current_art_bid.max_bid
-                ));
-                ui.label(format!(
-                    "Bid increase: {}",
-                    room_state.current_art_bid.bid_increase_amount
-                ));
-                ui.label(format!(
-                    "Owner: {}",
-                    room_state.current_art_bid.owner_player_id
-                ));
-
-                let button = ui.add_enabled(true, egui::Button::new("Bid"));
-
-                if button.clicked() {
-                    send_bid_action(current_player_data.player_id, room_state.room_id, net);
-                }
-
-                // Add button end round
-                if ui.button("End Round").clicked() {
-                    send_end_round_action(current_player_data.player_id, room_state.room_id, net);
-                }
-            });
-        });
-
-    egui::Area::new("round_1_area_bottom".into())
-        .anchor(Align2::CENTER_BOTTOM, (0., 0.))
-        .show(contexts.ctx_mut(), |ui| {
-            ui.horizontal(|ui| {
-                for player in room_state.players.iter() {
-                    ui.horizontal(|ui| {
-                        ui.label(player.username.clone());
-                        ui.label(format!("Money: {}", player.money));
-                    });
-                }
-            });
-        });
-}
 
 // === Intro scenes ===
 
@@ -207,7 +153,7 @@ pub fn add_waiting_room_scenes(app: &mut App) {
 pub fn draw_image_creation_ui(
     mut contexts: EguiContexts,
     mut player_settings: ResMut<PlayerSettings>,
-    mut prompt_info_data: ResMut<PromptInfoDataList>,
+    mut prompt_info_data: ResMut<PromptInfoDataRequest>,
     round_timer: ResMut<RoundTimer>,
     net: Res<Network<WebSocketProvider>>,
 ) {
@@ -286,9 +232,9 @@ pub fn add_image_generation_scenes(app: &mut App) {
     );
 }
 
-// === Round 1 scenes ===
+// === Bidding round scenes ===
 
-pub fn draw_round_1_ui(
+pub fn draw_bidding_round_ui(
     mut contexts: EguiContexts,
     round_timer: ResMut<RoundTimer>,
     mut query: Query<&mut RoomState>,
@@ -298,17 +244,17 @@ pub fn draw_round_1_ui(
     asset_server: ResMut<AssetServer>,
     mut images: ResMut<Images>,
     mut commands: Commands,
-    mut is_image_loaded: Local<bool>,
+    game_state: Res<State<GameState>>,
 ) {
     let room_state = query.get_single_mut().unwrap();
 
     match task_executor.poll() {
         AsyncTaskStatus::Idle => {
-            if !*is_image_loaded {
-                let url = room_state.current_art_bid.image_url.clone();
+            if images.current_bid_image.is_none() {
+                let url = room_state.current_art_bid.prompt_info.image_url.clone();
                 // Spawn an async task to download the image
                 task_executor.start(async move {
-                    info!("Started image loading");
+                    info!("Started image loading for: {}", url);
                     let response = get(&url).await.unwrap();
                     let bytes = response.bytes().await.unwrap();
 
@@ -344,17 +290,19 @@ pub fn draw_round_1_ui(
         AsyncTaskStatus::Finished(returned_image_option) => {
             if let Some(returned_image) = returned_image_option {
                 let image_handle = asset_server.add(returned_image.clone());
-                images.current_bid_image = image_handle.clone();
-                *is_image_loaded = true;
+                images.current_bid_image = Some(image_handle.clone());
                 // Spawn entity with this image
-                commands.spawn(SpriteBundle {
-                    texture: images.current_bid_image.clone(),
-                    sprite: Sprite {
-                        custom_size: Some(Vec2::new(85., 85.)),
-                        ..default()
+                commands.spawn((
+                    BidImage,
+                    SpriteBundle {
+                        texture: image_handle.clone(),
+                        sprite: Sprite {
+                            custom_size: Some(Vec2::new(85., 85.)),
+                            ..default()
+                        },
+                        ..Default::default()
                     },
-                    ..Default::default()
-                });
+                ));
             }
         }
     }
@@ -377,10 +325,10 @@ pub fn draw_round_1_ui(
                 let current_bid_owner = room_state
                     .players
                     .iter()
-                    .find(|player| player.id == room_state.current_art_bid.owner_player_id);
+                    .find(|player| player.id == room_state.current_art_bid.max_bid_player_id);
 
                 ui.vertical(|ui| {
-                    ui.label("Current owner:");
+                    ui.label("Max bid owner:");
                     if let Some(owner) = current_bid_owner {
                         if room_state.current_art_bid.max_bid > 0 {
                             ui.label(format!("{}", owner.username));
@@ -401,6 +349,12 @@ pub fn draw_round_1_ui(
                     send_end_round_action(current_player_data.player_id, room_state.room_id, &net);
                 }
             });
+            match game_state.get() {
+                GameState::BiddingRoundEnd => {
+                    ui.label("Bidding round end");
+                }
+                _ => {}
+            }
         });
 
     egui::Area::new("round_1_area_bottom".into())
@@ -410,80 +364,56 @@ pub fn draw_round_1_ui(
                 for player in room_state.players.iter() {
                     ui.horizontal(|ui| {
                         ui.label(player.username.clone());
-                        ui.label(format!("Money: {}", player.money));
                     });
                 }
             });
         });
 }
 
-pub fn on_enter_round_1(mut round_timer: ResMut<RoundTimer>) {
+pub fn on_enter_bidding_round(mut round_timer: ResMut<RoundTimer>) {
     // Create a new round timer
-    *round_timer = RoundTimer(Timer::from_seconds(ROUND_1_TIME, TimerMode::Once));
+    *round_timer = RoundTimer(Timer::from_seconds(BIDDING_ROUND_TIME, TimerMode::Once));
 }
 
-pub fn add_round_1_scenes(app: &mut App) {
-    app.add_systems(Update, draw_round_1_ui.run_if(in_state(GameState::Round1)))
-        .add_systems(OnEnter(GameState::Round1), on_enter_round_1);
+pub fn on_exit_bidding_round_end(mut commands: Commands, query: Query<Entity, With<BidImage>>, mut images: ResMut<Images>) {
+    // Remove the image entity
+    for entity in query.iter() {
+        commands.entity(entity).despawn_recursive();
+    }
+
+    // Clear the current bid image
+    images.current_bid_image = None;
 }
 
-// === Round 2 scenes ===
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+struct InBiddingRound;
 
-pub fn draw_round_2_ui(
-    mut contexts: EguiContexts,
-    round_timer: ResMut<RoundTimer>,
-    mut query: Query<&mut RoomState>,
-    current_player_data: Res<CurrentPlayerData>,
-    net: Res<Network<WebSocketProvider>>,
-) {
-    let room_state = query.get_single_mut().unwrap();
+impl ComputedStates for InBiddingRound {
+    type SourceStates = GameState;
+    fn compute(sources: GameState) -> Option<Self> {
+        match sources {
+            GameState::BiddingRound => Some(Self),
+            GameState::BiddingRoundEnd => Some(Self),
+            _ => None,
+        }
+    }
+}
 
-    draw_round_ui(
-        &mut contexts,
-        room_state.as_ref(),
-        &round_timer,
-        &current_player_data,
-        &net,
+pub fn add_bidding_round_scenes(app: &mut App) {
+    app.add_computed_state::<InBiddingRound>();
+    app.add_systems(
+        Update,
+        draw_bidding_round_ui
+            .run_if(in_state(InBiddingRound))
+    );
+    app.add_systems(OnEnter(GameState::BiddingRound), on_enter_bidding_round);
+    app.add_systems(
+        OnExit(GameState::BiddingRoundEnd),
+        on_exit_bidding_round_end,
     );
 }
 
-pub fn on_enter_round_2(mut round_timer: ResMut<RoundTimer>) {
-    // Create a new round timer
-    *round_timer = RoundTimer(Timer::from_seconds(ROUND_2_TIME, TimerMode::Once));
-}
-
-pub fn add_round_2_scenes(app: &mut App) {
-    app.add_systems(Update, draw_round_2_ui.run_if(in_state(GameState::Round2)))
-        .add_systems(OnEnter(GameState::Round2), on_enter_round_2);
-}
-
-// === ETC ===
-
-// pub fn draw_image(
-//     mut contexts: EguiContexts,
-//     mut is_initialized: Local<bool>,
-//     images: Res<Images>,
-//     mut rendered_texture_id: Local<egui::TextureId>,
-// ) {
-//     if !*is_initialized {
-//         *is_initialized = true;
-//         *rendered_texture_id = contexts.add_image(images.dog.clone_weak());
-//     }
-
-//     egui::Area::new("example_area2".into())
-//         .anchor(Align2::CENTER_TOP, (0., 100.))
-//         .show(contexts.ctx_mut(), |ui| {
-//             let added_button = ui.add(egui::ImageButton::new(egui::widgets::Image::new(
-//                 egui::load::SizedTexture::new(*rendered_texture_id, [256.0, 256.0]),
-//             )));
-//             if added_button.clicked() {
-//                 println!("Image clicked!");
-//             }
-//         });
-// }
-
 // === Main add logic ===
-
 pub fn add_scenes(app: &mut App) {
     app.init_state::<GameState>();
     app.insert_resource(Images::default());
@@ -492,6 +422,5 @@ pub fn add_scenes(app: &mut App) {
     add_image_creation_scenes(app);
     add_image_generation_scenes(app);
     add_backend_server_connections(app);
-    add_round_1_scenes(app);
-    add_round_2_scenes(app);
+    add_bidding_round_scenes(app);
 }

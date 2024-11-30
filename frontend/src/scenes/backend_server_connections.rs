@@ -36,7 +36,7 @@ pub fn send_start_game_request(room_id: u32, net: Res<Network<WebSocketProvider>
     }
 }
 
-pub fn send_completed_prompts(prompt_info_data: PromptInfoDataList, net: Res<Network<WebSocketProvider>>) {
+pub fn send_completed_prompts(prompt_info_data: PromptInfoDataRequest, net: Res<Network<WebSocketProvider>>) {
     match net.send_message(SERVER_CONNECTION_ID, prompt_info_data) {
         Ok(_) => info!("Sent completed prompts"),
         Err(e) => error!("Failed to send message: {:?}", e),
@@ -92,8 +92,8 @@ fn room_state_response(
 }
 
 fn prompt_info_response(
-    mut new_messages: EventReader<NetworkData<PromptInfoDataList>>,
-    mut prompt_info_data: ResMut<PromptInfoDataList>,
+    mut new_messages: EventReader<NetworkData<PromptInfoDataRequest>>,
+    mut prompt_info_data: ResMut<PromptInfoDataRequest>,
 ) {
     for new_message in new_messages.read() {
         info!("Received new prompt info message: {:?}", new_message);
@@ -147,6 +147,6 @@ pub fn add_backend_server_connections(app: &mut App) {
         .add_systems(Startup, setup_networking)
         .listen_for_message::<RoomState, WebSocketProvider>()
         .add_systems(Update, room_state_response)
-        .listen_for_message::<PromptInfoDataList, WebSocketProvider>()
+        .listen_for_message::<PromptInfoDataRequest, WebSocketProvider>()
         .add_systems(Update, prompt_info_response);
 }

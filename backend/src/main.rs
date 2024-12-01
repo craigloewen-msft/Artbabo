@@ -99,11 +99,21 @@ async fn get_image_url(input_string: String, url: String, api_key: String) -> Op
         // std::thread::sleep(std::time::Duration::from_secs(sleep_time));
 
         let random_image_list = vec![
-            "https://dalleproduse.blob.core.windows.net/private/images/4756af2f-c07e-40b9-abff-06184957db4a/generated_00.png?se=2024-11-30T22%3A05%3A37Z&sig=e2W8tJT6DwB3JY10VSV%2BR8mP2SHkKH4oWawoNbe8gvU%3D&ske=2024-12-06T07%3A57%3A19Z&skoid=09ba021e-c417-441c-b203-c81e5dcd7b7f&sks=b&skt=2024-11-29T07%3A57%3A19Z&sktid=33e01921-4d64-4f8c-a055-5bdaffd5e33d&skv=2020-10-02&sp=r&spr=https&sr=b&sv=2020-10-02",
+            // "https://dalleproduse.blob.core.windows.net/private/images/4756af2f-c07e-40b9-abff-06184957db4a/generated_00.png?se=2024-11-30T22%3A05%3A37Z&sig=e2W8tJT6DwB3JY10VSV%2BR8mP2SHkKH4oWawoNbe8gvU%3D&ske=2024-12-06T07%3A57%3A19Z&skoid=09ba021e-c417-441c-b203-c81e5dcd7b7f&sks=b&skt=2024-11-29T07%3A57%3A19Z&sktid=33e01921-4d64-4f8c-a055-5bdaffd5e33d&skv=2020-10-02&sp=r&spr=https&sr=b&sv=2020-10-02",
             "https://i.ebayimg.com/images/g/JPUAAOSw0n5lBnhv/s-l1200.jpg",
+            "https://picsum.photos/id/674/300/300",
+            "https://picsum.photos/id/675/300/300",
+            "https://picsum.photos/id/676/300/300",
+            "https://picsum.photos/id/677/300/300",
+            "https://picsum.photos/id/678/300/300",
         ];
 
-        return Some(random_image_list.choose(&mut thread_rng()).unwrap().to_string());
+        return Some(
+            random_image_list
+                .choose(&mut thread_rng())
+                .unwrap()
+                .to_string(),
+        );
     }
 
     let client = Client::new();
@@ -131,7 +141,13 @@ async fn get_image_url(input_string: String, url: String, api_key: String) -> Op
                         Some(data_first_element) => match data_first_element.get("url") {
                             Some(url) => {
                                 info!("Got url: {}", url);
-                                return Some(url.to_string());
+                                match url.as_str() {
+                                    Some(url) => return Some(url.to_string()),
+                                    None => {
+                                        error!("Failed to get url");
+                                        return None;
+                                    }
+                                }
                             }
                             None => {
                                 error!("Failed to get url");
@@ -201,90 +217,6 @@ fn update_room_state_for_all_players(
 //     Ok(())
 // }
 
-fn finalize_and_setup_new_round(room_state: &mut RoomState) {
-    let current_art_bid_number = room_state.current_art_bid.art_bid_number;
-
-    // Check if max bid is greater than 0 and handle existing bid info
-    if room_state.current_art_bid.max_bid > 0 {
-        let winning_player = room_state
-            .players
-            .iter_mut()
-            .find(|player| player.id == room_state.current_art_bid.max_bid_player_id);
-
-        match winning_player {
-            Some(player) => {
-                player.money -= room_state.current_art_bid.max_bid;
-                // TODO: Add art to player's collection
-            }
-            None => {
-                error!(
-                    "Could not find winning player with id {}",
-                    room_state.current_art_bid.max_bid_player_id
-                );
-            }
-        }
-
-        let current_prompt_info = &room_state.current_art_bid.prompt_info;
-
-        // Award money to art creator
-        let art_creator = room_state
-            .players
-            .iter_mut()
-            .find(|player| player.id == current_prompt_info.owner_id);
-
-        match art_creator {
-            Some(player) => {
-                player.money += room_state.current_art_bid.max_bid;
-            }
-            None => {
-                error!(
-                    "Could not find art creator with id {}",
-                    current_prompt_info.owner_id
-                );
-            }
-        }
-
-        // Move the prompt to the completed list
-        room_state.used_prompts.push(std::mem::replace(
-            &mut room_state.current_art_bid.prompt_info,
-            PromptInfoData::default(),
-        ));
-
-        info!(
-            "After removing prompt, current prompt_list: {:?}",
-            room_state.remaining_prompts,
-        );
-    }
-
-    if !room_state.remaining_prompts.is_empty() {
-        // Prepare the next bid info
-        room_state.current_art_bid = ArtBidInfo::default();
-        room_state.current_art_bid.bid_increase_amount = 100;
-        room_state.current_art_bid.art_bid_number = current_art_bid_number + 1;
-
-        // Prepare next round info
-        // Choose a random prompt
-        let random_prompt_number =
-            rand::random::<u32>() % room_state.remaining_prompts.len() as u32;
-
-        // Remove the prompt from the remaining prompts and insert it into current art bid
-        let random_prompt = room_state
-            .remaining_prompts
-            .remove(random_prompt_number as usize);
-        room_state.current_art_bid.prompt_info = random_prompt;
-
-        info!(
-            "Picked prompt {:?} for next round in room {}",
-            room_state.current_art_bid.prompt_info, room_state.room_id
-        );
-
-        info!(
-            "After progressing to new round, current art bid info: {:?}",
-            room_state
-        );
-    }
-}
-
 fn progress_round(
     room_state: &mut RoomState,
     timer: &mut RoundTimer,
@@ -303,7 +235,7 @@ fn progress_round(
         }
         GameState::ImageGeneration => {
             room_state.game_state = GameState::BiddingRound;
-            finalize_and_setup_new_round(room_state);
+            room_state.finalize_and_setup_new_round();
             timer.0 = Timer::from_seconds(BIDDING_ROUND_TIME, TimerMode::Once);
             info!("Progressed to round 1");
         }
@@ -315,7 +247,7 @@ fn progress_round(
             if room_state.remaining_prompts.len() > 0 {
                 room_state.game_state = GameState::BiddingRound;
                 timer.0 = Timer::from_seconds(BIDDING_ROUND_TIME, TimerMode::Once);
-                finalize_and_setup_new_round(room_state);
+                room_state.finalize_and_setup_new_round();
             } else {
                 room_state.game_state = GameState::Intro;
                 commands.entity(entity).remove::<RoundTimer>();
@@ -705,7 +637,9 @@ fn prompt_info_data_update(
             }
 
             // If we have enough prompts, progress the round
-            if room_state.received_prompt_count == room_state.players.len() as u32 * room_state.prompts_per_player  {
+            if room_state.received_prompt_count
+                == room_state.players.len() as u32 * room_state.prompts_per_player
+            {
                 progress_round(room_state, timer, &mut commands, *entity);
                 match update_room_state_for_all_players(room_state.deref_mut(), &net) {
                     Ok(_) => info!(

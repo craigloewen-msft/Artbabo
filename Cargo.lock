@@ -4814,6 +4814,7 @@ dependencies = [
  "bevy",
  "bevy_eventwork",
  "bevy_eventwork_mod_websockets",
+ "rand",
  "serde",
 ]
 

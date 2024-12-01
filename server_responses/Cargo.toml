@@ -6,5 +6,6 @@ edition = "2021"
 [dependencies]
 bevy = "0.14"
 serde = "1.0"
+rand = "0.8"
 bevy_eventwork = { version = "0.9", default-features = false }
 bevy_eventwork_mod_websockets = "0.2"

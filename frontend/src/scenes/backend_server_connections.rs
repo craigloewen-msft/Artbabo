@@ -101,6 +101,16 @@ fn prompt_info_response(
     }
 }
 
+fn round_end_info_response(
+    mut new_messages: EventReader<NetworkData<RoundEndInfo>>,
+    mut round_end_info_data: ResMut<RoundEndInfo>,
+) {
+    for new_message in new_messages.read() {
+        info!("Received new round end info message: {:?}", new_message);
+        *round_end_info_data = new_message.additional_clone();
+    }
+}
+
 // Etc. functions
 
 fn handle_network_events(mut new_network_events: EventReader<NetworkEvent>) {
@@ -148,5 +158,7 @@ pub fn add_backend_server_connections(app: &mut App) {
         .listen_for_message::<RoomState, WebSocketProvider>()
         .add_systems(Update, room_state_response)
         .listen_for_message::<PromptInfoDataRequest, WebSocketProvider>()
-        .add_systems(Update, prompt_info_response);
+        .add_systems(Update, prompt_info_response)
+        .listen_for_message::<RoundEndInfo, WebSocketProvider>()
+        .add_systems(Update, round_end_info_response);
 }

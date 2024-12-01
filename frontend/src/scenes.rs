@@ -248,6 +248,7 @@ pub fn draw_bidding_round_ui(
     mut images: ResMut<Images>,
     mut commands: Commands,
     game_state: Res<State<GameState>>,
+    round_end_info: Res<RoundEndInfo>,
 ) {
     let room_state = query.get_single_mut().unwrap();
 
@@ -378,6 +379,9 @@ pub fn draw_bidding_round_ui(
             match game_state.get() {
                 GameState::BiddingRoundEnd => {
                     ui.label("Bidding round end");
+                    ui.label(format!("Artist: {}", round_end_info.artist_name));
+                    ui.label(format!("Bid winner: {}", round_end_info.bid_winner_name));
+                    ui.label(format!("Amount won: {}", round_end_info.money_won));
                 }
                 _ => {}
             }
@@ -398,7 +402,7 @@ pub fn draw_bidding_round_ui(
 
 pub fn on_enter_bidding_round(mut round_timer: ResMut<RoundTimer>) {
     // Create a new round timer
-    *round_timer = RoundTimer(Timer::from_seconds(BIDDING_ROUND_TIME, TimerMode::Once));
+    *round_timer = RoundTimer(Timer::from_seconds(BIDDING_ROUND_TIME - 1.0, TimerMode::Once));
 }
 
 pub fn on_exit_bidding_round_end(

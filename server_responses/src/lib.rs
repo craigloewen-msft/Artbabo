@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy_eventwork::ConnectionId;
 use bevy_eventwork::NetworkMessage;
 use serde::Deserialize;
 use serde::Serialize;
@@ -53,7 +54,33 @@ pub struct ArtBidInfo {
     pub max_bid: u32,
     pub max_bid_player_id: u32,
     pub bid_increase_amount: u32,
-    pub art_bid_number: u32,
+}
+
+#[derive(Debug, Event, Clone, Serialize, Deserialize, Resource)]
+pub struct RoundEndInfo {
+    pub artist_name: String,
+    pub bid_winner_name: String,
+    pub money_won: u32,
+}
+
+impl NetworkMessage for RoundEndInfo {
+    const NAME: &'static str = "RoundEndInfo";
+}
+
+impl Default for RoundEndInfo {
+    fn default() -> Self {
+        RoundEndInfo {
+            artist_name: String::from("Unknown Artist"),
+            bid_winner_name: String::from("No one"),
+            money_won: 0,
+        }
+    }
+}
+
+impl RoundEndInfo {
+    pub fn additional_clone(&self) -> Self {
+        self.clone()
+    }
 }
 
 #[derive(Debug, Event, Clone, Serialize, Deserialize, Default)]
@@ -79,8 +106,18 @@ impl RoomState {
         self.clone()
     }
 
-    pub fn finalize_and_setup_new_round(&mut self) {
-        let current_art_bid_number = self.current_art_bid.art_bid_number;
+    pub fn finalize_round(&mut self) -> Option<RoundEndInfo> {
+        let mut round_end_info = RoundEndInfo::default();
+
+        // Put the artist name down
+        let artist_option = self
+            .players
+            .iter()
+            .find(|player| player.id == self.current_art_bid.prompt_info.owner_id);
+
+        if let Some(artist) = artist_option {
+            round_end_info.artist_name = artist.username.clone();
+        }
 
         // Check if max bid is greater than 0 and handle existing bid info
         if self.current_art_bid.max_bid > 0 {
@@ -93,12 +130,14 @@ impl RoomState {
                 Some(player) => {
                     player.money -= self.current_art_bid.max_bid;
                     // TODO: Add art to player's collection
+                    round_end_info.bid_winner_name = player.username.clone();
                 }
                 None => {
                     error!(
                         "Could not find winning player with id {}",
                         self.current_art_bid.max_bid_player_id
                     );
+                    return None;
                 }
             }
 
@@ -113,42 +152,44 @@ impl RoomState {
             match art_creator {
                 Some(player) => {
                     player.money += self.current_art_bid.max_bid;
+                    round_end_info.artist_name = player.username.clone();
                 }
                 None => {
                     error!(
                         "Could not find art creator with id {}",
                         current_prompt_info.owner_id
                     );
+                    return None;
                 }
             }
-
-            // Move the prompt to the completed list
-            self.used_prompts.push(std::mem::replace(
-                &mut self.current_art_bid.prompt_info,
-                PromptInfoData::default(),
-            ));
-
-            info!(
-                "After removing prompt, current prompt_list: {:?}",
-                self.remaining_prompts,
-            );
         }
+
+        return Some(round_end_info);
+    }
+
+    pub fn setup_next_round(&mut self) {
+        // Move the prompt to the completed list
+        self.used_prompts.push(std::mem::replace(
+            &mut self.current_art_bid.prompt_info,
+            PromptInfoData::default(),
+        ));
+
+        info!(
+            "After removing prompt, current prompt_list: {:?}",
+            self.remaining_prompts,
+        );
 
         if !self.remaining_prompts.is_empty() {
             // Prepare the next bid info
             self.current_art_bid = ArtBidInfo::default();
             self.current_art_bid.bid_increase_amount = 100;
-            self.current_art_bid.art_bid_number = current_art_bid_number + 1;
 
             // Prepare next round info
             // Choose a random prompt
-            let random_prompt_number =
-                rand::random::<u32>() % self.remaining_prompts.len() as u32;
+            let random_prompt_number = rand::random::<u32>() % self.remaining_prompts.len() as u32;
 
             // Remove the prompt from the remaining prompts and insert it into current art bid
-            let random_prompt = self
-                .remaining_prompts
-                .remove(random_prompt_number as usize);
+            let random_prompt = self.remaining_prompts.remove(random_prompt_number as usize);
             self.current_art_bid.prompt_info = random_prompt;
 
             info!(
@@ -160,6 +201,22 @@ impl RoomState {
                 "After progressing to new round, current art bid info: {:?}",
                 self
             );
+        }
+    }
+
+    pub fn disconnect_player(&mut self, player_id: ConnectionId) {
+        let player_index = self
+            .players
+            .iter()
+            .position(|player| player.id == player_id.id);
+
+        match player_index {
+            Some(index) => {
+                self.players.remove(index);
+            }
+            None => {
+                error!("Could not find player with id {}", player_id);
+            }
         }
     }
 }

@@ -13,6 +13,7 @@ use rand::thread_rng;
 pub const IMAGE_CREATION_TIME: f32 = 120.0;
 pub const BIDDING_ROUND_TIME: f32 = 10.0;
 pub const BIDDING_ROUND_END_TIME: f32 = 5.0;
+pub const END_SCORE_SCREEN_TIME: f32 = 30.0;
 
 pub const MIN_ART_VALUE: u32 = 100;
 pub const MAX_ART_VALUE: u32 = 3500;
@@ -33,6 +34,7 @@ pub enum GameState {
     ImageGeneration,
     BiddingRound,
     BiddingRoundEnd,
+    EndScoreScreen,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -101,6 +103,27 @@ impl Default for RoundEndInfo {
 }
 
 impl RoundEndInfo {
+    pub fn additional_clone(&self) -> Self {
+        self.clone()
+    }
+}
+
+#[derive(Debug, Event, Clone, Serialize, Deserialize)]
+pub struct GameEndPlayerInfo {
+    pub username: String,
+    pub money: i32,
+}
+
+#[derive(Debug, Event, Clone, Serialize, Deserialize, Resource, Default)]
+pub struct GameEndInfo {
+    pub players: Vec<GameEndPlayerInfo>,
+}
+
+impl NetworkMessage for GameEndInfo {
+    const NAME: &'static str = "GameEndInfo";
+}
+
+impl GameEndInfo {
     pub fn additional_clone(&self) -> Self {
         self.clone()
     }
@@ -245,6 +268,24 @@ impl RoomState {
                 error!("Could not find player with id {}", player_id);
             }
         }
+    }
+
+    pub fn get_game_end_info(&self) -> Option<GameEndInfo> {
+        let mut game_end_info = GameEndInfo {
+            players: Vec::new(),
+        };
+
+        for player in &self.players {
+            game_end_info.players.push(GameEndPlayerInfo {
+                username: player.username.clone(),
+                money: player.money,
+            });
+        }
+
+        // Sort players by money amount
+        game_end_info.players.sort_by(|a, b| b.money.cmp(&a.money));
+
+        return Some(game_end_info);
     }
 }
 

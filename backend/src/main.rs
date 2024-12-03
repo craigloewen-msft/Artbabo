@@ -5,6 +5,7 @@ use bevy::tasks::TaskPoolBuilder;
 use bevy::{log::LogPlugin, tasks::TaskPool};
 use bevy_eventwork::{
     AppNetworkMessage, ConnectionId, EventworkRuntime, Network, NetworkData, NetworkEvent,
+    NetworkMessage,
 };
 
 use core::net::Ipv4Addr;
@@ -177,37 +178,17 @@ async fn get_image_url(input_string: String, url: String, api_key: String) -> Op
     }
 }
 
-fn update_room_state_for_all_players(
+fn send_message_to_all_players<T>(
+    round_end_info: &T,
     room_state: &RoomState,
     net: &Res<Network<WebSocketProvider>>,
-) -> Result<(), String> {
-    for player in room_state.players.iter() {
-        match net.send_message(ConnectionId { id: player.id }, room_state.clone()) {
-            Ok(_) => info!(
-                "Sent room state response to {} with id {}",
-                player.username, player.id
-            ),
-            Err(e) => {
-                error!("Failed to send message: {:?}", e);
-                return Err(format!("Failed to send message: {:?}", e));
-            }
-        }
-    }
-
-    Ok(())
-}
-
-fn update_round_end_info_for_all_players(
-    round_end_info: &RoundEndInfo,
-    room_state: &RoomState,
-    net: &Res<Network<WebSocketProvider>>,
-) -> Result<(), String> {
+) -> Result<(), String>
+where
+    T: Clone + NetworkMessage,
+{
     for player in room_state.players.iter() {
         match net.send_message(ConnectionId { id: player.id }, round_end_info.clone()) {
-            Ok(_) => info!(
-                "Sent round end info to {} with id {}",
-                player.username, player.id
-            ),
+            Ok(_) => {}
             Err(e) => {
                 error!("Failed to send message: {:?}", e);
                 return Err(format!("Failed to send message: {:?}", e));
@@ -266,7 +247,8 @@ fn progress_round(
 
             // Send round end info to all players
             if let Some(round_end_info) = round_end_info_option {
-                let _ = update_round_end_info_for_all_players(&round_end_info, room_state, net);
+                let _ =
+                    send_message_to_all_players::<RoundEndInfo>(&round_end_info, room_state, net);
             } else {
                 error!("Failed to finalize round: {:?}", room_state);
             }
@@ -277,9 +259,22 @@ fn progress_round(
                 timer.0 = Timer::from_seconds(BIDDING_ROUND_TIME, TimerMode::Once);
                 room_state.setup_next_round();
             } else {
-                room_state.game_state = GameState::Intro;
-                commands.entity(entity).remove::<RoundTimer>();
+                room_state.game_state = GameState::EndScoreScreen;
+                timer.0 = Timer::from_seconds(END_SCORE_SCREEN_TIME, TimerMode::Once);
+                let game_end_info_option = room_state.get_game_end_info();
+
+                // Send game end info to all players
+                if let Some(game_end_info) = game_end_info_option {
+                    let _ =
+                        send_message_to_all_players::<GameEndInfo>(&game_end_info, room_state, net);
+                } else {
+                    error!("Failed to finalize game: {:?}", room_state);
+                }
             }
+        }
+        GameState::EndScoreScreen => {
+            room_state.game_state = GameState::Intro;
+            commands.entity(entity).remove::<RoundTimer>();
         }
         _ => {
             error!(
@@ -388,7 +383,12 @@ fn handle_connection_events(
                 room_state.disconnect_player(*conn_id);
 
                 // Send updated room state to all players
-                match update_room_state_for_all_players(room_state.deref_mut(), &net) {
+                let room_state_deref_mut = room_state.deref_mut();
+                match send_message_to_all_players::<RoomState>(
+                    &room_state_deref_mut,
+                    &room_state_deref_mut,
+                    &net,
+                ) {
                     Ok(_) => info!(
                         "Updated player state for all players in room {}",
                         room_state.room_id
@@ -423,7 +423,12 @@ fn handle_timer_events(
             );
 
             // Send updated room state to all players
-            match update_room_state_for_all_players(&room_state, &net) {
+            let room_state_deref_mut = room_state.deref_mut();
+            match send_message_to_all_players::<RoomState>(
+                &room_state_deref_mut,
+                &room_state_deref_mut,
+                &net,
+            ) {
                 Ok(_) => info!(
                     "Updated player state for all players in room {}",
                     room_state.room_id
@@ -492,7 +497,12 @@ fn handle_image_generation_tasks(
                 );
 
                 // Send updated room state to all players
-                match update_room_state_for_all_players(room_state.deref_mut(), &net) {
+                let room_state_deref_mut = room_state.deref_mut();
+                match send_message_to_all_players::<RoomState>(
+                    &room_state_deref_mut,
+                    &room_state_deref_mut,
+                    &net,
+                ) {
                     Ok(_) => info!(
                         "Updated player state for all players in room {}",
                         room_state.room_id
@@ -527,7 +537,12 @@ fn room_join_request(
             ));
 
             // Send updated room state to all players
-            match update_room_state_for_all_players(room_state.deref_mut(), &net) {
+            let room_state_deref_mut = room_state.deref_mut();
+            match send_message_to_all_players::<RoomState>(
+                &room_state_deref_mut,
+                &room_state_deref_mut,
+                &net,
+            ) {
                 Ok(_) => info!(
                     "Updated player state for all players in room {}",
                     room_state.room_id
@@ -548,7 +563,7 @@ fn room_join_request(
             )],
             game_state: GameState::WaitingRoom,
             current_art_bid: ArtBidInfo::default(),
-            prompts_per_player: 3,
+            prompts_per_player: 2,
             remaining_prompts: vec![],
             used_prompts: vec![],
             received_prompt_count: 0,
@@ -635,7 +650,12 @@ fn start_game_request(
             // Set game timer
             timer.0 = Timer::from_seconds(IMAGE_CREATION_TIME, TimerMode::Once);
 
-            match update_room_state_for_all_players(room_state.deref_mut(), &net) {
+            let room_state_deref_mut = room_state.deref_mut();
+            match send_message_to_all_players::<RoomState>(
+                &room_state_deref_mut,
+                &room_state_deref_mut,
+                &net,
+            ) {
                 Ok(_) => info!("Started game in room {}", room_state.room_id),
                 Err(e) => error!("Failed to send message: {:?}", e),
             }
@@ -697,7 +717,12 @@ fn prompt_info_data_update(
                 == room_state.players.len() as u32 * room_state.prompts_per_player
             {
                 progress_round(room_state, timer, &mut commands, *entity, &net);
-                match update_room_state_for_all_players(room_state.deref_mut(), &net) {
+                let room_state_deref_mut = room_state.deref_mut();
+                match send_message_to_all_players::<RoomState>(
+                    &room_state_deref_mut,
+                    &room_state_deref_mut,
+                    &net,
+                ) {
                     Ok(_) => info!(
                         "Received all prompts and now progressing in room {}",
                         room_state.room_id
@@ -776,7 +801,12 @@ fn game_action_request_update(
                 }
             }
 
-            match update_room_state_for_all_players(room_state.deref_mut(), &net) {
+            let room_state_deref_mut = room_state.deref_mut();
+            match send_message_to_all_players::<RoomState>(
+                &room_state_deref_mut,
+                &room_state_deref_mut,
+                &net,
+            ) {
                 Ok(_) => info!(
                     "Updated player state for all players in room {}",
                     room_state.room_id

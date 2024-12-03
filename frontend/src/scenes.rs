@@ -403,7 +403,10 @@ pub fn draw_bidding_round_ui(
 
 pub fn on_enter_bidding_round(mut round_timer: ResMut<RoundTimer>) {
     // Create a new round timer
-    *round_timer = RoundTimer(Timer::from_seconds(BIDDING_ROUND_TIME - 1.0, TimerMode::Once));
+    *round_timer = RoundTimer(Timer::from_seconds(
+        BIDDING_ROUND_TIME - 1.0,
+        TimerMode::Once,
+    ));
 }
 
 pub fn on_exit_bidding_round_end(
@@ -447,6 +450,42 @@ pub fn add_bidding_round_scenes(app: &mut App) {
     );
 }
 
+// === End score screen scenes ===
+
+pub fn draw_end_score_screen_ui(mut contexts: EguiContexts, game_end_info: Res<GameEndInfo>, round_timer: Res<RoundTimer>) {
+    egui::Area::new("end_score_screen_area".into())
+        .anchor(Align2::CENTER_TOP, (0., 0.))
+        .show(contexts.ctx_mut(), |ui| {
+            ui.vertical(|ui| {
+                ui.label("Time left: ");
+                ui.label(format!("{:.2}", round_timer.0.remaining_secs()));
+            });
+            ui.label("End score screen");
+
+            for (index, player) in game_end_info.players.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    ui.label(format!("{}. {}: {}", index + 1, player.username, player.money));
+                });
+            }
+        });
+}
+
+pub fn on_enter_end_score_screen(mut round_timer: ResMut<RoundTimer>) {
+    // Create a new round timer
+    *round_timer = RoundTimer(Timer::from_seconds(
+        END_SCORE_SCREEN_TIME - 1.0,
+        TimerMode::Once,
+    ));
+}
+
+pub fn add_end_score_screen_scenes(app: &mut App) {
+    app.add_systems(
+        Update,
+        draw_end_score_screen_ui.run_if(in_state(GameState::EndScoreScreen)),
+    );
+    app.add_systems(OnEnter(GameState::EndScoreScreen), on_enter_end_score_screen);
+}
+
 // === Main add logic ===
 pub fn add_scenes(app: &mut App) {
     app.init_state::<GameState>();
@@ -457,4 +496,5 @@ pub fn add_scenes(app: &mut App) {
     add_image_generation_scenes(app);
     add_backend_server_connections(app);
     add_bidding_round_scenes(app);
+    add_end_score_screen_scenes(app);
 }

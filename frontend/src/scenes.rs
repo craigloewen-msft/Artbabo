@@ -381,7 +381,8 @@ pub fn draw_bidding_round_ui(
                     ui.label("Bidding round end");
                     ui.label(format!("Artist: {}", round_end_info.artist_name));
                     ui.label(format!("Bid winner: {}", round_end_info.bid_winner_name));
-                    ui.label(format!("Amount won: {}", round_end_info.money_won));
+                    ui.label(format!("Amount bid: {}", round_end_info.winning_bid_amount));
+                    ui.label(format!("Art value: {}", round_end_info.art_value));
                 }
                 _ => {}
             }

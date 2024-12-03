@@ -756,7 +756,7 @@ fn game_action_request_update(
                             if room_state.game_state == GameState::BiddingRound {
                                 let new_bid_amount = room_state.current_art_bid.max_bid
                                     + room_state.current_art_bid.bid_increase_amount;
-                                if player.money >= new_bid_amount {
+                                if player.money >= new_bid_amount as i32 {
                                     info!("Player {} bid {}", player.id, new_bid_amount);
                                     room_state.current_art_bid.max_bid_player_id = player.id;
                                     room_state.current_art_bid.max_bid = new_bid_amount;

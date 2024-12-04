@@ -1,5 +1,3 @@
-use std::char::MAX;
-
 use bevy::prelude::*;
 use bevy_eventwork::ConnectionId;
 use bevy_eventwork::NetworkMessage;
@@ -7,13 +5,14 @@ use rand::Rng;
 use serde::Deserialize;
 use serde::Serialize;
 
-use rand::seq::SliceRandom;
 use rand::thread_rng;
 
 pub const IMAGE_CREATION_TIME: f32 = 120.0;
 pub const BIDDING_ROUND_TIME: f32 = 10.0;
 pub const BIDDING_ROUND_END_TIME: f32 = 5.0;
 pub const END_SCORE_SCREEN_TIME: f32 = 30.0;
+
+pub const NOTIFICATION_LIFETIME: f32 = 3.0;
 
 pub const MIN_ART_VALUE: u32 = 100;
 pub const MAX_ART_VALUE: u32 = 3500;
@@ -43,6 +42,7 @@ pub struct Player {
     #[serde(skip)]
     pub money: i32,
     pub id: u32,
+    pub force_bids_left: u32,
 }
 
 // Make a constructor for Player with a string input
@@ -52,6 +52,7 @@ impl Player {
             username,
             money: 3000,
             id,
+            force_bids_left: 2,
         }
     }
 }
@@ -178,7 +179,8 @@ impl RoomState {
 
             match winning_player {
                 Some(player) => {
-                    player.money += self.current_art_bid.art_value as i32 - self.current_art_bid.max_bid as i32;
+                    player.money +=
+                        self.current_art_bid.art_value as i32 - self.current_art_bid.max_bid as i32;
                     // TODO: Add art to player's collection
                     round_end_info.bid_winner_name = player.username.clone();
                 }
@@ -252,6 +254,94 @@ impl RoomState {
                 self
             );
         }
+    }
+
+    pub fn player_force_bid(
+        &mut self,
+        requestor_id: u32,
+        target_id: u32,
+    ) -> Option<GamePlayerNotificationRequest> {
+        let requestor = match self
+            .players
+            .iter_mut()
+            .find(|player| player.id == requestor_id)
+        {
+            Some(player) => player,
+            None => {
+                error!(
+                    "Couldn't find force bid requestor player id: {}",
+                    requestor_id
+                );
+                return None;
+            }
+        };
+
+        if self.game_state != GameState::BiddingRound {
+            return None;
+        }
+
+        if requestor.force_bids_left <= 0 {
+            return None;
+        }
+
+        requestor.force_bids_left -= 1;
+
+        let player_bid_result_option = self.player_bid(target_id);
+
+        if let Some(_player_bid_result_option) = player_bid_result_option {
+            return Some(GamePlayerNotificationRequest {
+                target_player_id: target_id,
+                message: format!(
+                    "{} has been forced to bid {}",
+                    self.players
+                        .iter()
+                        .find(|player| player.id == target_id)
+                        .unwrap()
+                        .username
+                        .clone(),
+                    self.current_art_bid.max_bid
+                ),
+            });
+        } else {
+            return None;
+        }
+    }
+
+    pub fn player_bid(&mut self, player_id: u32) -> Option<GamePlayerNotificationRequest> {
+        let player = match self
+            .players
+            .iter_mut()
+            .find(|player| player.id == player_id)
+        {
+            Some(player) => player,
+            None => {
+                error!("Couldn't find requested player id: {}", player_id);
+                return None;
+            }
+        };
+
+        if self.game_state != GameState::BiddingRound {
+            return None;
+        }
+
+        let new_bid_amount =
+            self.current_art_bid.max_bid + self.current_art_bid.bid_increase_amount;
+
+        if player.money < new_bid_amount as i32 {
+            return None;
+        }
+
+        self.current_art_bid.max_bid_player_id = player_id;
+        self.current_art_bid.max_bid = new_bid_amount;
+
+        return Some(GamePlayerNotificationRequest {
+            target_player_id: player_id,
+            message: format!(
+                "{} has bid {}",
+                player.username.clone(),
+                self.current_art_bid.max_bid
+            ),
+        });
     }
 
     pub fn disconnect_player(&mut self, player_id: ConnectionId) {
@@ -349,12 +439,14 @@ impl NetworkMessage for PromptInfoDataRequest {
 pub enum GameAction {
     Bid,
     EndRound,
+    ForceBid,
 }
 
 #[derive(Debug, Event, Clone, Serialize, Deserialize)]
 pub struct GameActionRequest {
     pub room_id: u32,
-    pub player_id: u32,
+    pub requestor_player_id: u32,
+    pub target_player_id: u32,
     pub action: GameAction,
 }
 
@@ -365,6 +457,33 @@ impl NetworkMessage for GameActionRequest {
 impl HasRoomId for GameActionRequest {
     fn room_id(&self) -> u32 {
         self.room_id
+    }
+}
+
+#[derive(Debug, Component, Clone)]
+pub struct GamePlayerNotification {
+    pub target_player_id: u32,
+    pub message: String,
+    pub timer: Timer,
+}
+
+#[derive(Debug, Event, Clone, Serialize, Deserialize)]
+pub struct GamePlayerNotificationRequest {
+    pub target_player_id: u32,
+    pub message: String,
+}
+
+impl NetworkMessage for GamePlayerNotificationRequest {
+    const NAME: &'static str = "GameNotificationRequest";
+}
+
+impl GamePlayerNotificationRequest {
+    pub fn get_notification(&self) -> GamePlayerNotification {
+        GamePlayerNotification {
+            target_player_id: self.target_player_id,
+            message: self.message.clone(),
+            timer: Timer::from_seconds(NOTIFICATION_LIFETIME, TimerMode::Once),
+        }
     }
 }
 

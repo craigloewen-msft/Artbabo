@@ -43,16 +43,24 @@ pub fn send_completed_prompts(prompt_info_data: PromptInfoDataRequest, net: Res<
     }
 }
 
-pub fn send_bid_action(player_id: u32, room_id: u32, net: &Network<WebSocketProvider>) {
-    match net.send_message(SERVER_CONNECTION_ID, GameActionRequest { player_id, room_id, action: GameAction::Bid }) {
-        Ok(_) => info!("Player: {} sent bid action", player_id),
+pub fn send_bid_action(requestor_player_id: u32, room_id: u32, net: &Network<WebSocketProvider>) {
+    match net.send_message(SERVER_CONNECTION_ID, GameActionRequest { requestor_player_id, target_player_id: 0, room_id, action: GameAction::Bid }) {
+        Ok(_) => info!("Player: {} sent bid action", requestor_player_id),
         Err(e) => error!("Failed to send message: {:?}", e),
     }
 }
 
-pub fn send_end_round_action(player_id: u32, room_id: u32, net: &Network<WebSocketProvider>) {
-    match net.send_message(SERVER_CONNECTION_ID, GameActionRequest { player_id, room_id, action: GameAction::EndRound }) {
-        Ok(_) => info!("Player: {} sent bid action", player_id),
+pub fn send_end_round_action(requestor_player_id: u32, room_id: u32, net: &Network<WebSocketProvider>) {
+    match net.send_message(SERVER_CONNECTION_ID, GameActionRequest { requestor_player_id, target_player_id: 0, room_id, action: GameAction::EndRound }) {
+        Ok(_) => info!("Player: {} sent end round action", requestor_player_id),
+        Err(e) => error!("Failed to send message: {:?}", e),
+    }
+}
+
+
+pub fn send_force_bid_action(requestor_player_id: u32, target_player_id: u32, room_id: u32, net: &Network<WebSocketProvider>) {
+    match net.send_message(SERVER_CONNECTION_ID, GameActionRequest { requestor_player_id, target_player_id, room_id, action: GameAction::ForceBid }) {
+        Ok(_) => info!("Player: {} sent force bid action", requestor_player_id),
         Err(e) => error!("Failed to send message: {:?}", e),
     }
 }
@@ -121,6 +129,16 @@ fn game_end_info_response(
     }
 }
 
+fn game_player_notification_response(
+    mut new_messages: EventReader<NetworkData<GamePlayerNotificationRequest>>,
+    mut commands: Commands,
+) {
+    for new_message in new_messages.read() {
+        info!("Received new round end info message: {:?}", new_message);
+        commands.spawn(new_message.get_notification());
+    }
+}
+
 // Etc. functions
 
 fn handle_network_events(mut new_network_events: EventReader<NetworkEvent>) {
@@ -172,5 +190,7 @@ pub fn add_backend_server_connections(app: &mut App) {
         .listen_for_message::<RoundEndInfo, WebSocketProvider>()
         .add_systems(Update, round_end_info_response)
         .listen_for_message::<GameEndInfo, WebSocketProvider>()
-        .add_systems(Update, game_end_info_response);
+        .add_systems(Update, game_end_info_response)
+        .listen_for_message::<GamePlayerNotificationRequest, WebSocketProvider>()
+        .add_systems(Update, game_player_notification_response);
 }

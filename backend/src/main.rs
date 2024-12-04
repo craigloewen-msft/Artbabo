@@ -55,6 +55,9 @@ struct RoomStateServerInfo {
     task_list: Vec<ImageGenerationTask>,
 }
 
+#[derive(Component)]
+struct GameCleanupTimer(Timer);
+
 fn main() {
     info!("Building app");
     let mut app = App::new();
@@ -76,6 +79,8 @@ fn main() {
         .add_systems(Update, handle_connection_events)
         .add_systems(Update, tick_timers)
         .add_systems(Update, handle_timer_events)
+        .add_systems(Update, tick_cleanup_timer)
+        .add_systems(Update, handle_cleanup_timer)
         .add_systems(Update, handle_image_generation_tasks)
         .listen_for_message::<RoomJoinRequest, WebSocketProvider>()
         .add_systems(Update, room_join_request)
@@ -274,7 +279,8 @@ fn progress_round(
         }
         GameState::EndScoreScreen => {
             room_state.game_state = GameState::Intro;
-            commands.entity(entity).remove::<RoundTimer>();
+            info!("Game ended for room {}, removing room", room_state.room_id);
+            commands.entity(entity).despawn_recursive();
         }
         _ => {
             error!(
@@ -371,29 +377,35 @@ fn setup_networking(
 
 fn handle_connection_events(
     mut network_events: EventReader<NetworkEvent>,
-    mut query: Query<(&mut RoomState)>,
+    mut query: Query<(Entity, &mut RoomState)>,
     net: Res<Network<WebSocketProvider>>,
+    mut commands: Commands,
 ) {
     for event in network_events.read() {
         if let NetworkEvent::Connected(conn_id) = event {
             info!("New player connected: {}", conn_id);
         } else if let NetworkEvent::Disconnected(conn_id) = event {
             info!("Player disconnected: {}", conn_id);
-            for (mut room_state) in query.iter_mut() {
+            for (entity, mut room_state) in query.iter_mut() {
                 room_state.disconnect_player(*conn_id);
 
-                // Send updated room state to all players
-                let room_state_deref_mut = room_state.deref_mut();
-                match send_message_to_all_players::<RoomState>(
-                    &room_state_deref_mut,
-                    &room_state_deref_mut,
-                    &net,
-                ) {
-                    Ok(_) => info!(
-                        "Updated player state for all players in room {}",
-                        room_state.room_id
-                    ),
-                    Err(e) => error!("Failed to send message: {:?}", e),
+                if room_state.players.len() == 0 {
+                    info!("Room {} is empty, despawning", room_state.room_id);
+                    commands.entity(entity).despawn_recursive();
+                } else {
+                    // Send updated room state to all players
+                    let room_state_deref_mut = room_state.deref_mut();
+                    match send_message_to_all_players::<RoomState>(
+                        &room_state_deref_mut,
+                        &room_state_deref_mut,
+                        &net,
+                    ) {
+                        Ok(_) => info!(
+                            "Updated player state for all players in room {}",
+                            room_state.room_id
+                        ),
+                        Err(e) => error!("Failed to send message: {:?}", e),
+                    }
                 }
             }
         }
@@ -435,6 +447,27 @@ fn handle_timer_events(
                 ),
                 Err(e) => error!("Failed to send message: {:?}", e),
             }
+        }
+    }
+}
+
+fn tick_cleanup_timer(time: Res<Time>, mut query: Query<&mut GameCleanupTimer>) {
+    for mut timer in query.iter_mut() {
+        timer.0.tick(time.delta());
+    }
+}
+
+fn handle_cleanup_timer(
+    mut query: Query<(Entity, &RoomState, &GameCleanupTimer)>,
+    mut commands: Commands,
+) {
+    for (entity, room_state, timer) in query.iter_mut() {
+        if timer.0.finished() {
+            info!(
+                "Cleanup timer finished for room {}, removing",
+                room_state.room_id
+            );
+            commands.entity(entity).despawn_recursive();
         }
     }
 }
@@ -621,7 +654,7 @@ fn start_game_request(
             for player in room_state.players.iter() {
                 let mut prompt_list = Vec::new();
 
-                for i in 0..room_state.prompts_per_player {
+                for _i in 0..room_state.prompts_per_player {
                     let new_prompt = PromptInfoData {
                         prompt_text: String::default(),
                         prompt_answer: String::default(),
@@ -649,6 +682,19 @@ fn start_game_request(
 
             // Set game timer
             timer.0 = Timer::from_seconds(IMAGE_CREATION_TIME, TimerMode::Once);
+
+            // Set clean up timer
+            commands
+                .entity(*entity)
+                .insert(GameCleanupTimer(Timer::from_seconds(
+                    IMAGE_CREATION_TIME
+                        + (BIDDING_ROUND_TIME + BIDDING_ROUND_END_TIME)
+                            * room_state.prompts_per_player as f32
+                            * room_state.players.len() as f32
+                        + END_SCORE_SCREEN_TIME
+                        + 10.0,
+                    TimerMode::Once,
+                )));
 
             let room_state_deref_mut = room_state.deref_mut();
             match send_message_to_all_players::<RoomState>(
@@ -686,7 +732,7 @@ fn prompt_info_data_update(
 
             for player in room_state.players.iter_mut() {
                 if player.id == incoming_connection_id {
-                    for (prompt_index, prompt) in message.prompt_list.iter().enumerate() {
+                    for (_prompt_index, prompt) in message.prompt_list.iter().enumerate() {
                         if prompt.prompt_answer != "" {
                             info!("Generating image for prompt: {:?}", prompt);
 
@@ -754,49 +800,39 @@ fn game_action_request_update(
         &mut query,
         |mut room_state, mut timer, _room_state_server_info, net, entity, message| {
             info!("Received game action request: {:?}", message);
-            let message_source = message.source();
-            let incoming_connection_id = message_source.id;
 
-            // Get the player who sent the message
-            let player_option = room_state
-                .players
-                .iter_mut()
-                .find(|player| player.id == incoming_connection_id);
+            // Handle the action
+            match message.action {
+                GameAction::Bid => {
+                    let bid_result_option = room_state.player_bid(message.requestor_player_id);
 
-            match player_option {
-                None => {
-                    error!(
-                        "Player with id {} not found in room {}",
-                        incoming_connection_id, room_state.room_id
-                    );
-                    return;
+                    // Send a bid notification to all players
+                    if let Some(bid_result) = bid_result_option {
+                        let _ =
+                            send_message_to_all_players::<GamePlayerNotificationRequest>(&bid_result, room_state, net);
+                    } else {
+                        error!("Failed to process bid: {:?}", room_state);
+                    }
                 }
-                Some(player) => {
-                    info!("Player {:?} took action: {:?}", player.id, message.action);
+                GameAction::EndRound => {
+                    progress_round(
+                        room_state.deref_mut(),
+                        timer.deref_mut(),
+                        &mut commands,
+                        *entity,
+                        &net,
+                    );
+                }
+                GameAction::ForceBid => {
+                    let bid_result_option = room_state
+                        .player_force_bid(message.requestor_player_id, message.target_player_id);
 
-                    // Handle the action
-                    match message.action {
-                        GameAction::Bid => {
-                            info!("Player trying to bid on art");
-                            if room_state.game_state == GameState::BiddingRound {
-                                let new_bid_amount = room_state.current_art_bid.max_bid
-                                    + room_state.current_art_bid.bid_increase_amount;
-                                if player.money >= new_bid_amount as i32 {
-                                    info!("Player {} bid {}", player.id, new_bid_amount);
-                                    room_state.current_art_bid.max_bid_player_id = player.id;
-                                    room_state.current_art_bid.max_bid = new_bid_amount;
-                                }
-                            }
-                        }
-                        GameAction::EndRound => {
-                            progress_round(
-                                room_state.deref_mut(),
-                                timer.deref_mut(),
-                                &mut commands,
-                                *entity,
-                                &net,
-                            );
-                        }
+                    // Send a bid notification to all players
+                    if let Some(bid_result) = bid_result_option {
+                        let _ =
+                            send_message_to_all_players::<GamePlayerNotificationRequest>(&bid_result, room_state, net);
+                    } else {
+                        error!("Failed to process bid: {:?}", room_state);
                     }
                 }
             }

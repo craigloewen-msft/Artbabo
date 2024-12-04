@@ -249,8 +249,15 @@ pub fn draw_bidding_round_ui(
     mut commands: Commands,
     game_state: Res<State<GameState>>,
     round_end_info: Res<RoundEndInfo>,
+    notifications_query: Query<&GamePlayerNotification>,
 ) {
     let room_state = query.get_single_mut().unwrap();
+
+    let current_player = room_state
+        .players
+        .iter()
+        .find(|player| player.id == current_player_data.player_id)
+        .unwrap();
 
     match task_executor.poll() {
         AsyncTaskStatus::Idle => {
@@ -322,6 +329,7 @@ pub fn draw_bidding_round_ui(
                 commands.spawn((
                     BidImage,
                     SpriteBundle {
+                        transform: Transform::from_translation(Vec3::new(0., -15.0, 0.)),
                         texture: image_handle.clone(),
                         sprite: Sprite {
                             custom_size: Some(Vec2::new(85., 85.)),
@@ -337,6 +345,7 @@ pub fn draw_bidding_round_ui(
     egui::Area::new("round_area".into())
         .anchor(Align2::CENTER_TOP, (0., 0.))
         .show(contexts.ctx_mut(), |ui| {
+            // Show initial top bar of status
             ui.horizontal(|ui| {
                 // Show timer information at top
                 ui.vertical(|ui| {
@@ -365,19 +374,61 @@ pub fn draw_bidding_round_ui(
                     }
                 });
 
-                let button = ui.add_enabled(true, egui::Button::new("Bid"));
+                let button = ui.add_enabled(*game_state.get() == GameState::BiddingRound, egui::Button::new("Bid"));
 
                 if button.clicked() {
                     send_bid_action(current_player_data.player_id, room_state.room_id, &net);
                 }
+            });
 
-                // Add button end round
-                if ui.button("End Round").clicked() {
-                    send_end_round_action(current_player_data.player_id, room_state.room_id, &net);
+            // Show force bid buttons
+            ui.add_space(10.0);
+            ui.label(format!(
+                "Force bids left: {}",
+                current_player.force_bids_left
+            ));
+            ui.horizontal(|ui| {
+                for player in room_state.players.iter() {
+                    if player.id != current_player_data.player_id {
+                        let force_bid_button = ui.add_enabled(
+                            current_player.force_bids_left > 0 && *game_state.get() == GameState::BiddingRound,
+                            egui::Button::new("Force bid"),
+                        );
+
+                        if force_bid_button.clicked() {
+                            send_force_bid_action(
+                                current_player_data.player_id,
+                                player.id,
+                                room_state.room_id,
+                                &net,
+                            );
+                        }
+                        ui.label(format!("{}", player.username));
+                    }
+                }
+            });
+
+            // Show other players
+            ui.add_space(10.0);
+            ui.label("Other player info");
+            ui.horizontal(|ui| {
+                for player in room_state.players.iter() {
+                    if player.id != current_player_data.player_id {
+                        ui.vertical(|ui| {
+                            ui.label(format!("Force bids left: {}", player.force_bids_left));
+                            ui.label(player.username.clone());
+                            for notification in notifications_query.iter() {
+                                if notification.target_player_id == player.id {
+                                    ui.label(notification.message.clone());
+                                }
+                            }
+                        });
+                    }
                 }
             });
             match game_state.get() {
                 GameState::BiddingRoundEnd => {
+                    ui.add_space(10.0);
                     ui.label("Bidding round end");
                     ui.label(format!("Artist: {}", round_end_info.artist_name));
                     ui.label(format!("Bid winner: {}", round_end_info.bid_winner_name));
@@ -386,18 +437,6 @@ pub fn draw_bidding_round_ui(
                 }
                 _ => {}
             }
-        });
-
-    egui::Area::new("round_1_area_bottom".into())
-        .anchor(Align2::CENTER_BOTTOM, (0., 0.))
-        .show(contexts.ctx_mut(), |ui| {
-            ui.horizontal(|ui| {
-                for player in room_state.players.iter() {
-                    ui.horizontal(|ui| {
-                        ui.label(player.username.clone());
-                    });
-                }
-            });
         });
 }
 
@@ -452,7 +491,11 @@ pub fn add_bidding_round_scenes(app: &mut App) {
 
 // === End score screen scenes ===
 
-pub fn draw_end_score_screen_ui(mut contexts: EguiContexts, game_end_info: Res<GameEndInfo>, round_timer: Res<RoundTimer>) {
+pub fn draw_end_score_screen_ui(
+    mut contexts: EguiContexts,
+    game_end_info: Res<GameEndInfo>,
+    round_timer: Res<RoundTimer>,
+) {
     egui::Area::new("end_score_screen_area".into())
         .anchor(Align2::CENTER_TOP, (0., 0.))
         .show(contexts.ctx_mut(), |ui| {
@@ -464,7 +507,12 @@ pub fn draw_end_score_screen_ui(mut contexts: EguiContexts, game_end_info: Res<G
 
             for (index, player) in game_end_info.players.iter().enumerate() {
                 ui.horizontal(|ui| {
-                    ui.label(format!("{}. {}: {}", index + 1, player.username, player.money));
+                    ui.label(format!(
+                        "{}. {}: {}",
+                        index + 1,
+                        player.username,
+                        player.money
+                    ));
                 });
             }
         });
@@ -483,7 +531,10 @@ pub fn add_end_score_screen_scenes(app: &mut App) {
         Update,
         draw_end_score_screen_ui.run_if(in_state(GameState::EndScoreScreen)),
     );
-    app.add_systems(OnEnter(GameState::EndScoreScreen), on_enter_end_score_screen);
+    app.add_systems(
+        OnEnter(GameState::EndScoreScreen),
+        on_enter_end_score_screen,
+    );
 }
 
 // === Main add logic ===

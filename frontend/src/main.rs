@@ -35,7 +35,8 @@ fn main() {
     .insert_resource(RoundTimer(Timer::from_seconds(5.0, TimerMode::Once)))
     .add_systems(Startup, setup)
     .add_systems(Update, update_camera_scaling)
-    .add_systems(Update, tick_timers);
+    .add_systems(Update, tick_timers)
+    .add_systems(Update, remove_finished_notifications);
     // .add_systems(Update, handle_timer_events);
 
     add_scenes(&mut app);
@@ -66,8 +67,20 @@ fn update_camera_scaling(
     }
 }
 
-fn tick_timers(time: Res<Time>, mut round_timer: ResMut<RoundTimer>) {
+fn tick_timers(time: Res<Time>, mut round_timer: ResMut<RoundTimer>, mut notification_timers: Query<&mut GamePlayerNotification>) {
     round_timer.0.tick(time.delta());
+
+    for mut game_notification in notification_timers.iter_mut() {
+        game_notification.timer.tick(time.delta());
+    }
+}
+
+fn remove_finished_notifications(mut commands: Commands, query: Query<(Entity, &GamePlayerNotification)>) {
+    for (entity, game_notification) in query.iter() {
+        if game_notification.timer.finished() {
+            commands.entity(entity).despawn();
+        }
+    }
 }
 
 // fn handle_timer_events(mut query: Query<&mut RoundTimer>) {

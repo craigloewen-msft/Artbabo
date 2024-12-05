@@ -17,6 +17,9 @@ pub const NOTIFICATION_LIFETIME: f32 = 3.0;
 pub const MIN_ART_VALUE: u32 = 100;
 pub const MAX_ART_VALUE: u32 = 3500;
 
+pub const BID_INCREASE_TIMER_VALUE: f32 = 1.0;
+pub const BID_INCREASE_TIMER_START_WINDOW: f32 = 10.0;
+
 #[derive(Component, Resource)]
 pub struct RoundTimer(pub Timer);
 
@@ -286,6 +289,15 @@ impl RoomState {
 
         requestor.force_bids_left -= 1;
 
+        let requestor_username = requestor.username.clone();
+        let target_username = self
+            .players
+            .iter()
+            .find(|player| player.id == target_id)
+            .unwrap()
+            .username
+            .clone();
+
         let player_bid_result_option = self.player_bid(target_id);
 
         if let Some(_player_bid_result_option) = player_bid_result_option {
@@ -293,17 +305,19 @@ impl RoomState {
                 target_player_id: target_id,
                 message: format!(
                     "{} has been forced to bid {}",
-                    self.players
-                        .iter()
-                        .find(|player| player.id == target_id)
-                        .unwrap()
-                        .username
-                        .clone(),
-                    self.current_art_bid.max_bid
+                    target_username, self.current_art_bid.max_bid,
                 ),
+                action: GameAction::Bid,
             });
         } else {
-            return None;
+            return Some(GamePlayerNotificationRequest {
+                target_player_id: target_id,
+                message: format!(
+                    "{} tried to force {} to bid, but it failed!",
+                    requestor_username, target_username,
+                ),
+                action: GameAction::Bid,
+            });
         }
     }
 
@@ -341,6 +355,7 @@ impl RoomState {
                 player.username.clone(),
                 self.current_art_bid.max_bid
             ),
+            action: GameAction::Bid,
         });
     }
 
@@ -464,6 +479,7 @@ impl HasRoomId for GameActionRequest {
 pub struct GamePlayerNotification {
     pub target_player_id: u32,
     pub message: String,
+    pub action: GameAction,
     pub timer: Timer,
 }
 
@@ -471,6 +487,7 @@ pub struct GamePlayerNotification {
 pub struct GamePlayerNotificationRequest {
     pub target_player_id: u32,
     pub message: String,
+    pub action: GameAction,
 }
 
 impl NetworkMessage for GamePlayerNotificationRequest {
@@ -482,6 +499,7 @@ impl GamePlayerNotificationRequest {
         GamePlayerNotification {
             target_player_id: self.target_player_id,
             message: self.message.clone(),
+            action: self.action.clone(),
             timer: Timer::from_seconds(NOTIFICATION_LIFETIME, TimerMode::Once),
         }
     }

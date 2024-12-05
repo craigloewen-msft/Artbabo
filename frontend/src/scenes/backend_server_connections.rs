@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use bevy::{
     prelude::*,
     tasks::{TaskPool, TaskPoolBuilder},
@@ -36,7 +38,10 @@ pub fn send_start_game_request(room_id: u32, net: Res<Network<WebSocketProvider>
     }
 }
 
-pub fn send_completed_prompts(prompt_info_data: PromptInfoDataRequest, net: Res<Network<WebSocketProvider>>) {
+pub fn send_completed_prompts(
+    prompt_info_data: PromptInfoDataRequest,
+    net: Res<Network<WebSocketProvider>>,
+) {
     match net.send_message(SERVER_CONNECTION_ID, prompt_info_data) {
         Ok(_) => info!("Sent completed prompts"),
         Err(e) => error!("Failed to send message: {:?}", e),
@@ -44,22 +49,54 @@ pub fn send_completed_prompts(prompt_info_data: PromptInfoDataRequest, net: Res<
 }
 
 pub fn send_bid_action(requestor_player_id: u32, room_id: u32, net: &Network<WebSocketProvider>) {
-    match net.send_message(SERVER_CONNECTION_ID, GameActionRequest { requestor_player_id, target_player_id: 0, room_id, action: GameAction::Bid }) {
+    match net.send_message(
+        SERVER_CONNECTION_ID,
+        GameActionRequest {
+            requestor_player_id,
+            target_player_id: 0,
+            room_id,
+            action: GameAction::Bid,
+        },
+    ) {
         Ok(_) => info!("Player: {} sent bid action", requestor_player_id),
         Err(e) => error!("Failed to send message: {:?}", e),
     }
 }
 
-pub fn send_end_round_action(requestor_player_id: u32, room_id: u32, net: &Network<WebSocketProvider>) {
-    match net.send_message(SERVER_CONNECTION_ID, GameActionRequest { requestor_player_id, target_player_id: 0, room_id, action: GameAction::EndRound }) {
+pub fn send_end_round_action(
+    requestor_player_id: u32,
+    room_id: u32,
+    net: &Network<WebSocketProvider>,
+) {
+    match net.send_message(
+        SERVER_CONNECTION_ID,
+        GameActionRequest {
+            requestor_player_id,
+            target_player_id: 0,
+            room_id,
+            action: GameAction::EndRound,
+        },
+    ) {
         Ok(_) => info!("Player: {} sent end round action", requestor_player_id),
         Err(e) => error!("Failed to send message: {:?}", e),
     }
 }
 
-
-pub fn send_force_bid_action(requestor_player_id: u32, target_player_id: u32, room_id: u32, net: &Network<WebSocketProvider>) {
-    match net.send_message(SERVER_CONNECTION_ID, GameActionRequest { requestor_player_id, target_player_id, room_id, action: GameAction::ForceBid }) {
+pub fn send_force_bid_action(
+    requestor_player_id: u32,
+    target_player_id: u32,
+    room_id: u32,
+    net: &Network<WebSocketProvider>,
+) {
+    match net.send_message(
+        SERVER_CONNECTION_ID,
+        GameActionRequest {
+            requestor_player_id,
+            target_player_id,
+            room_id,
+            action: GameAction::ForceBid,
+        },
+    ) {
         Ok(_) => info!("Player: {} sent force bid action", requestor_player_id),
         Err(e) => error!("Failed to send message: {:?}", e),
     }
@@ -90,7 +127,7 @@ fn room_state_response(
         }
 
         // Else create a new entity with room state
-        
+
         // Find the player id of the current player, the last player added to the list
         let player_id = updated_players.last().unwrap().id;
         *current_player_data = CurrentPlayerData { player_id };
@@ -132,10 +169,24 @@ fn game_end_info_response(
 fn game_player_notification_response(
     mut new_messages: EventReader<NetworkData<GamePlayerNotificationRequest>>,
     mut commands: Commands,
+    mut timer: ResMut<RoundTimer>,
 ) {
     for new_message in new_messages.read() {
         info!("Received new round end info message: {:?}", new_message);
         commands.spawn(new_message.get_notification());
+
+        match new_message.action {
+            GameAction::Bid => {
+                let current_duration = timer.0.duration().as_secs_f32();
+                if timer.0.remaining_secs() < BID_INCREASE_TIMER_START_WINDOW {
+                    timer.0.set_duration(Duration::from_secs(
+                        (current_duration + BID_INCREASE_TIMER_VALUE) as u64,
+                    ));
+                }
+            }
+            GameAction::EndRound => {}
+            GameAction::ForceBid => {}
+        }
     }
 }
 

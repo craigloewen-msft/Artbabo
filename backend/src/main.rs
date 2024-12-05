@@ -13,6 +13,7 @@ use std::env;
 use std::fmt::Debug;
 use std::net::{IpAddr, SocketAddr};
 use std::ops::DerefMut;
+use std::time::Duration;
 
 use bevy::tasks::{futures_lite::future, AsyncComputeTaskPool, Task};
 
@@ -687,12 +688,13 @@ fn start_game_request(
             commands
                 .entity(*entity)
                 .insert(GameCleanupTimer(Timer::from_seconds(
-                    IMAGE_CREATION_TIME
+                    (IMAGE_CREATION_TIME
                         + (BIDDING_ROUND_TIME + BIDDING_ROUND_END_TIME)
                             * room_state.prompts_per_player as f32
                             * room_state.players.len() as f32
                         + END_SCORE_SCREEN_TIME
-                        + 10.0,
+                        + 10.0)
+                        * 2.0, // Add a 2 x safety to be safe
                     TimerMode::Once,
                 )));
 
@@ -805,11 +807,41 @@ fn game_action_request_update(
             match message.action {
                 GameAction::Bid => {
                     let bid_result_option = room_state.player_bid(message.requestor_player_id);
+                    // Extend timer by 1 second
+                    if timer.0.remaining_secs() < BID_INCREASE_TIMER_START_WINDOW {
+                        timer.0.set_duration(Duration::from_secs(
+                            (timer.0.duration().as_secs_f32() + BID_INCREASE_TIMER_VALUE) as u64,
+                        ));
+                    }
 
                     // Send a bid notification to all players
                     if let Some(bid_result) = bid_result_option {
-                        let _ =
-                            send_message_to_all_players::<GamePlayerNotificationRequest>(&bid_result, room_state, net);
+                        let _ = send_message_to_all_players::<GamePlayerNotificationRequest>(
+                            &bid_result,
+                            room_state,
+                            net,
+                        );
+                    } else {
+                        error!("Failed to process bid: {:?}", room_state);
+                    }
+                }
+                GameAction::ForceBid => {
+                    let bid_result_option = room_state
+                        .player_force_bid(message.requestor_player_id, message.target_player_id);
+
+                    if timer.0.remaining_secs() < BID_INCREASE_TIMER_START_WINDOW {
+                        timer.0.set_duration(Duration::from_secs(
+                            (timer.0.duration().as_secs_f32() + BID_INCREASE_TIMER_VALUE) as u64,
+                        ));
+                    }
+
+                    // Send a bid notification to all players
+                    if let Some(bid_result) = bid_result_option {
+                        let _ = send_message_to_all_players::<GamePlayerNotificationRequest>(
+                            &bid_result,
+                            room_state,
+                            net,
+                        );
                     } else {
                         error!("Failed to process bid: {:?}", room_state);
                     }
@@ -822,18 +854,6 @@ fn game_action_request_update(
                         *entity,
                         &net,
                     );
-                }
-                GameAction::ForceBid => {
-                    let bid_result_option = room_state
-                        .player_force_bid(message.requestor_player_id, message.target_player_id);
-
-                    // Send a bid notification to all players
-                    if let Some(bid_result) = bid_result_option {
-                        let _ =
-                            send_message_to_all_players::<GamePlayerNotificationRequest>(&bid_result, room_state, net);
-                    } else {
-                        error!("Failed to process bid: {:?}", room_state);
-                    }
                 }
             }
 

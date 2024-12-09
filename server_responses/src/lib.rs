@@ -20,6 +20,8 @@ pub const MAX_ART_VALUE: u32 = 3500;
 pub const BID_INCREASE_TIMER_VALUE: f32 = 1.0;
 pub const BID_INCREASE_TIMER_START_WINDOW: f32 = 10.0;
 
+pub const MAX_PLAYERS: usize = 8;
+
 #[derive(Component, Resource)]
 pub struct RoundTimer(pub Timer);
 
@@ -144,6 +146,7 @@ pub struct RoomState {
     pub remaining_prompts: Vec<PromptInfoData>,
     pub used_prompts: Vec<PromptInfoData>,
     pub received_prompt_count: u32,
+    pub room_code: String,
 }
 
 impl NetworkMessage for RoomState {
@@ -397,7 +400,7 @@ impl RoomState {
 #[derive(Debug, Event, Clone, Serialize, Deserialize, Default)]
 pub struct RoomJoinRequest {
     pub username: String,
-    pub room_id: u32,
+    pub room_code: String,
 }
 
 impl NetworkMessage for RoomJoinRequest {

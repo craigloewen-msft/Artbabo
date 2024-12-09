@@ -1,4 +1,5 @@
 use bevy::ecs::query::QueryFilter;
+use bevy::ecs::world::error;
 use bevy::log::Level;
 use bevy::prelude::*;
 use bevy::tasks::TaskPoolBuilder;
@@ -34,6 +35,9 @@ const DEBUG_MODE: bool = true;
 
 #[derive(Component)]
 struct PublicRoom;
+
+#[derive(Component)]
+struct PrivateRoom;
 
 #[derive(Component)]
 struct InGame;
@@ -336,6 +340,36 @@ fn find_and_handle_room<T, Q>(
     }
 }
 
+fn create_new_room_state(mut commands: Commands, room_code: &String) -> Entity {
+    // Else create a new entity with room state
+    let new_room_entity = commands.spawn(PublicRoom).id();
+
+    let new_room_state = RoomState {
+        room_id: new_room_entity.index(),
+        players: vec![],
+        game_state: GameState::WaitingRoom,
+        current_art_bid: ArtBidInfo::default(),
+        prompts_per_player: 2,
+        remaining_prompts: vec![],
+        used_prompts: vec![],
+        received_prompt_count: 0,
+        room_code: room_code.clone(),
+    };
+
+    let mut inserted_timer = Timer::from_seconds(5.0, TimerMode::Once);
+    inserted_timer.pause();
+
+    commands
+        .entity(new_room_entity)
+        .insert(RoundTimer(inserted_timer));
+    commands.entity(new_room_entity).insert(new_room_state);
+    commands
+        .entity(new_room_entity)
+        .insert(RoomStateServerInfo::default());
+
+    new_room_entity
+}
+
 // === Scene handling functions ===
 
 // === Core functionality ===
@@ -549,80 +583,90 @@ fn handle_image_generation_tasks(
 }
 
 // === API Requests ===
-
 fn room_join_request(
     mut new_messages: EventReader<NetworkData<RoomJoinRequest>>,
     net: Res<Network<WebSocketProvider>>,
-    mut query: Query<&mut RoomState, (With<PublicRoom>, Without<InGame>)>,
+    mut room_query: Query<(Entity, &mut RoomState), Without<InGame>>,
     mut commands: Commands,
 ) {
     for new_message in new_messages.read() {
         info!("New room join request: {:?}", new_message);
-        let message_source = new_message.source();
-        let incoming_connection_id = message_source.id;
 
-        // TODO: I'm sure this code is full of bugs. Need to evaluate and fix!
+        let searched_room_option = room_query
+            .iter_mut()
+            .find(|search_room_state| search_room_state.1.room_code == new_message.room_code);
 
-        // If the room already exists, its state will get updated
-        for mut room_state in query.iter_mut() {
+        if let Some(mut room) = searched_room_option {
+            // Room is found
+            info!("Found existing room for join request");
+            let room_state = room.1.deref_mut();
+
             room_state.players.push(Player::new(
-                incoming_connection_id,
+                new_message.source().id,
                 new_message.username.clone(),
             ));
 
-            // Send updated room state to all players
-            let room_state_deref_mut = room_state.deref_mut();
-            match send_message_to_all_players::<RoomState>(
-                &room_state_deref_mut,
-                &room_state_deref_mut,
-                &net,
-            ) {
+            match send_message_to_all_players::<RoomState>(room_state, room_state, &net) {
                 Ok(_) => info!(
                     "Updated player state for all players in room {}",
                     room_state.room_id
                 ),
                 Err(e) => error!("Failed to send message: {:?}", e),
             }
-            return;
-        }
+        } else {
+            // Else create a new entity with room state
+            info!("No room found creating a new one");
 
-        // Else create a new entity with room state
-        let new_room_entity = commands.spawn(PublicRoom).id();
+            let new_room_entity = commands.spawn(PublicRoom).id();
 
-        let response = RoomState {
-            room_id: new_room_entity.index(),
-            players: vec![Player::new(
-                incoming_connection_id,
-                new_message.username.clone(),
-            )],
-            game_state: GameState::WaitingRoom,
-            current_art_bid: ArtBidInfo::default(),
-            prompts_per_player: 2,
-            remaining_prompts: vec![],
-            used_prompts: vec![],
-            received_prompt_count: 0,
+            let mut new_room_state = RoomState {
+                room_id: new_room_entity.index(),
+                players: vec![Player::new(
+                    new_message.source().id,
+                    new_message.username.clone(),
+                )],
+                game_state: GameState::WaitingRoom,
+                current_art_bid: ArtBidInfo::default(),
+                prompts_per_player: 2,
+                remaining_prompts: vec![],
+                used_prompts: vec![],
+                received_prompt_count: 0,
+                room_code: new_message.room_code.clone(),
+            };
+
+            let mut inserted_timer = Timer::from_seconds(5.0, TimerMode::Once);
+            inserted_timer.pause();
+
+            commands
+                .entity(new_room_entity)
+                .insert(RoundTimer(inserted_timer));
+
+            let cloned_room_state = new_room_state.clone();
+
+            commands.entity(new_room_entity).insert(new_room_state);
+
+            commands
+                .entity(new_room_entity)
+                .insert(RoomStateServerInfo::default());
+
+            if new_message.room_code == "" {
+                commands.entity(new_room_entity).insert(PublicRoom);
+            } else {
+                commands.entity(new_room_entity).insert(PrivateRoom);
+            }
+
+            match send_message_to_all_players::<RoomState>(
+                &cloned_room_state,
+                &cloned_room_state,
+                &net,
+            ) {
+                Ok(_) => info!(
+                    "Updated player state for all players in room {}",
+                    new_room_entity.index()
+                ),
+                Err(e) => error!("Failed to send message: {:?}", e),
+            }
         };
-
-        let mut inserted_timer = Timer::from_seconds(5.0, TimerMode::Once);
-        inserted_timer.pause();
-
-        commands
-            .entity(new_room_entity)
-            .insert(RoundTimer(inserted_timer));
-        commands.entity(new_room_entity).insert(response.clone());
-        commands
-            .entity(new_room_entity)
-            .insert(RoomStateServerInfo::default());
-
-        match net.send_message(
-            ConnectionId {
-                id: incoming_connection_id,
-            },
-            response,
-        ) {
-            Ok(_) => info!("Created room with id {} ", new_room_entity.index()),
-            Err(e) => error!("Failed to send message: {:?}", e),
-        }
     }
 }
 

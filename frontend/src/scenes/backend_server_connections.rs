@@ -17,10 +17,22 @@ const SERVER_CONNECTION_ID: ConnectionId = ConnectionId { id: 0 };
 
 // Send message functions
 
-pub fn send_random_room_request(username: &str, net: Res<Network<WebSocketProvider>>) {
+pub fn send_random_room_request(username: &str, net: &Res<Network<WebSocketProvider>>) {
     let request = RoomJoinRequest {
         username: username.to_string(),
-        room_id: 0,
+        room_code: "".to_string(),
+    };
+
+    match net.send_message(SERVER_CONNECTION_ID, request) {
+        Ok(_) => info!("Sent random room request"),
+        Err(e) => error!("Failed to send message: {:?}", e),
+    }
+}
+
+pub fn send_private_room_request(username: &str, room_code: &str, net: &Res<Network<WebSocketProvider>>) {
+    let request = RoomJoinRequest {
+        username: username.to_string(),
+        room_code: room_code.to_string(),
     };
 
     match net.send_message(SERVER_CONNECTION_ID, request) {

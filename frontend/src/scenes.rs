@@ -61,11 +61,6 @@ fn timer_value_to_alpha_function(
         // Linear fade out
         return_value = remaining_time_value / fade_out_value * 255.0;
     }
-    info!("Alpha value: {}", return_value as u8);
-    info!(
-        "Debug info: {} {} {} {}",
-        remaining_time_value, fade_in_value, fade_out_value, total_timer_value
-    );
     return return_value as u8;
 }
 
@@ -74,6 +69,7 @@ fn timer_value_to_alpha_function(
 pub fn draw_intro_ui(
     mut contexts: EguiContexts,
     mut input_text: Local<String>,
+    mut room_code_text: Local<String>,
     mut player_settings: ResMut<PlayerSettings>,
     net: Res<Network<WebSocketProvider>>,
 ) {
@@ -84,18 +80,33 @@ pub fn draw_intro_ui(
             .show(contexts.ctx_mut(), |ui| {
                 ui.vertical(|ui| {
                     ui.label("Select a room");
-                    ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
                         let random_room = ui.button("Join random room");
-                        let private_room = ui.button("Join private room");
-
+                        ui.add_space(10.0);
                         if random_room.clicked() {
                             info!("Starting request to server");
 
-                            send_random_room_request(player_settings.username.as_str(), net);
+                            send_random_room_request(player_settings.username.as_str(), &net);
                         }
-                        if private_room.clicked() {
-                            info!("Joining private room");
-                        }
+
+                        ui.add_space(10.0);
+
+                        ui.vertical(|ui| {
+                            ui.label("Enter custom room code");
+                            ui.text_edit_singleline(&mut *room_code_text);
+                            let private_room = ui.add_enabled(
+                                room_code_text.len() > 0,
+                                egui::Button::new("Join private room"),
+                            );
+                            if private_room.clicked() {
+                                info!("Joining private room");
+                                send_private_room_request(
+                                    player_settings.username.as_str(),
+                                    &room_code_text,
+                                    &net,
+                                );
+                            }
+                        });
                     });
                 });
             });
@@ -143,7 +154,6 @@ pub fn draw_waiting_room_ui(
                 for player in room_state.players.iter() {
                     ui.horizontal(|ui| {
                         ui.label(player.username.clone());
-                        ui.label(format!("Money: {}", player.money));
                     });
                 }
 

@@ -7,7 +7,6 @@ use serde::Serialize;
 
 use rand::thread_rng;
 
-pub const IMAGE_CREATION_TIME: f32 = 120.0;
 pub const BIDDING_ROUND_TIME: f32 = 10.0;
 pub const BIDDING_ROUND_END_TIME: f32 = 5.0;
 pub const END_SCORE_SCREEN_TIME: f32 = 30.0;
@@ -21,6 +20,7 @@ pub const BID_INCREASE_TIMER_VALUE: f32 = 1.0;
 pub const BID_INCREASE_TIMER_START_WINDOW: f32 = 10.0;
 
 pub const MAX_PLAYERS: usize = 8;
+pub const IMAGE_GEN_TIMEOUT_SECS : u64 = 60;
 
 #[derive(Component, Resource)]
 pub struct RoundTimer(pub Timer);
@@ -35,7 +35,6 @@ pub enum GameState {
     Intro,
     WaitingRoom,
     ImageCreation,
-    ImageGeneration,
     BiddingRound,
     BiddingRoundEnd,
     EndScoreScreen,
@@ -145,7 +144,6 @@ pub struct RoomState {
     #[serde(skip)]
     pub remaining_prompts: Vec<PromptInfoData>,
     pub used_prompts: Vec<PromptInfoData>,
-    pub received_prompt_count: u32,
     pub room_code: String,
 }
 
@@ -395,6 +393,10 @@ impl RoomState {
 
         return Some(game_end_info);
     }
+
+    pub fn get_completed_prompt_count(&self) -> u32 {
+        return self.remaining_prompts.len() as u32;
+    }
 }
 
 #[derive(Debug, Event, Clone, Serialize, Deserialize, Default)]
@@ -422,6 +424,16 @@ impl HasRoomId for StartGameRequest {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum PromptState {
+    #[default]
+    Proposed,
+    SentForFeedback,
+    PromptCompleted,
+    FullyCompleted,
+    Error
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PromptInfoData {
     pub prompt_text: String,
@@ -430,10 +442,13 @@ pub struct PromptInfoData {
     pub owner_id: u32,
 }
 
-#[derive(Debug, Event, Clone, Serialize, Deserialize, Resource, Default)]
+#[derive(Debug, Event, Clone, Serialize, Deserialize, Default)]
 pub struct PromptInfoDataRequest {
-    pub prompt_list: Vec<PromptInfoData>,
+    pub prompt: PromptInfoData,
     pub room_id: u32,
+    pub front_end_prompt_index: Option<usize>,
+    pub error_message: String,
+    pub state: PromptState,
 }
 
 impl HasRoomId for PromptInfoDataRequest {

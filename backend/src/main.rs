@@ -1,5 +1,4 @@
 use bevy::ecs::query::QueryFilter;
-use bevy::ecs::world::error;
 use bevy::log::Level;
 use bevy::prelude::*;
 use bevy::tasks::TaskPoolBuilder;
@@ -28,10 +27,12 @@ use rand::thread_rng;
 
 use bevy_eventwork_mod_websockets::*;
 
+use chrono::{DateTime, Utc};
+
 extern crate server_responses;
 use server_responses::*;
 
-const DEBUG_MODE: bool = true;
+const DEBUG_MODE: bool = false;
 
 #[derive(Component)]
 struct PublicRoom;
@@ -43,21 +44,36 @@ struct PrivateRoom;
 struct InGame;
 
 #[derive(Resource, Default)]
-struct ImageGenerationInfo {
-    endpoint: String,
-    api_key: String,
+struct AzureEndpointInfo {
+    image_gen_endpoint: String,
+    image_gen_key: String,
+    completions_endpoint: String,
+    completions_key: String,
+}
+
+#[derive(Resource, Default)]
+struct GlobalServerValues {
+    next_available_server_time: DateTime<Utc>,
 }
 
 #[derive(Debug, Component)]
 struct ImageGenerationTask {
     task: Task<Option<String>>,
-    prompt_to_complete: PromptInfoData,
+    prompt_data: PromptInfoDataRequest,
+    status: TaskCompletionStatus,
+}
+
+#[derive(Debug, Component)]
+struct CheckPromptTask {
+    task: Task<Result<(), String>>,
+    prompt_data: PromptInfoDataRequest,
     status: TaskCompletionStatus,
 }
 
 #[derive(Component, Default)]
 struct RoomStateServerInfo {
-    task_list: Vec<ImageGenerationTask>,
+    image_task_list: Vec<ImageGenerationTask>,
+    prompt_task_list: Vec<CheckPromptTask>,
 }
 
 #[derive(Component)]
@@ -78,7 +94,8 @@ fn main() {
             TaskPoolBuilder::new().num_threads(2).build(),
         ))
         .insert_resource(NetworkSettings::default())
-        .insert_resource(ImageGenerationInfo::default())
+        .insert_resource(AzureEndpointInfo::default())
+        .insert_resource(GlobalServerValues::default())
         .add_systems(Startup, setup_networking)
         .add_systems(Startup, setup_connections)
         .add_systems(Update, handle_connection_events)
@@ -87,6 +104,7 @@ fn main() {
         .add_systems(Update, tick_cleanup_timer)
         .add_systems(Update, handle_cleanup_timer)
         .add_systems(Update, handle_image_generation_tasks)
+        .add_systems(Update, handle_check_prompt_tasks)
         .listen_for_message::<RoomJoinRequest, WebSocketProvider>()
         .add_systems(Update, room_join_request)
         .listen_for_message::<StartGameRequest, WebSocketProvider>()
@@ -171,7 +189,7 @@ async fn get_image_url(input_string: String, url: String, api_key: String) -> Op
                         }
                     },
                     None => {
-                        error!("Failed to get data");
+                        error!("Failed to get data {:?}", json);
                         return None;
                     }
                 },
@@ -186,6 +204,132 @@ async fn get_image_url(input_string: String, url: String, api_key: String) -> Op
             return None;
         }
     }
+}
+
+async fn check_prompt_answer(
+    prompt_text: String,
+    prompt_answer: String,
+    completions_endpoint: String,
+    completions_key: String,
+) -> Result<(), String> {
+    // Simulate a long-running task
+    info!("Checking prompt answer");
+
+    // Sleep a random time
+    // let sleep_time = rand::random::<u64>() % 8;
+    // std::thread::sleep(std::time::Duration::from_secs(sleep_time));
+
+    // Simulate a random check for the prompt answer
+
+    let client = Client::new();
+
+    let request_body = json!({
+       "messages": [
+           {
+               "role": "system",
+               "content": r###"You are an AI agent who helps approve or reject prompts for a game.You are shown the given prompt, and the user's answer.
+You should reject any prompts that are using words that are synonyms to any words in the input prompt, or are too close to them, like the game taboo.
+These prompts will be used to generate an image, so reject prompts that use direct synonyms while accepting prompts that use descriptions."###.to_string()
+           },
+           {
+            "role": "user",
+            "content": r###"Prompt: A labrador with antlers
+    Response: A dog with hooves and horns"###,
+           },
+           {
+            "role": "assistant",
+            "content": "Response is rejected. 'Dog' is too close to 'labrador' and 'horns' is too close to 'antlers'",
+           },
+           {
+            "role": "user",
+            "content": r###"Prompt: A caterpillar with a sword
+    Response: Three green circles attached together with bug eyes and lots of legs, and one of the legs is holding a pointed piece of metal"###,
+           },
+           {
+            "role": "assistant",
+            "content": "Response is approved.",
+           },
+           {
+            "role": "user",
+            "content": r###"Prompt: Can of spinach
+    Response: A circular metal object with a label on it. The label has a white background, and on the foreground is a green plant."###,
+           },
+           {
+            "role": "assistant",
+            "content": "Response is approved.",
+           },
+           {
+            "role": "user",
+            "content": r###"Prompt: Lightning striking a ferris wheel
+    Response: At the top of the image are clouds. They are dark and seem like they are stormy. Beneath them is an amusement park, with different rides and attractions. One circular ride has a bolt of light connecting it to the heavens."###,
+           },
+           {
+            "role": "assistant",
+            "content": "Response is rejected. 'Bolt of light' is too similar to 'lightning'.",
+           },
+           {
+            "role": "user",
+            "content": format!(r###"Prompt: {}
+    Response: {}"###, prompt_text, prompt_answer)
+           }
+       ],
+       "temperature": 0.01,
+    });
+
+    let response = client
+        .post(completions_endpoint)
+        .header("api-key", completions_key)
+        .json(&request_body)
+        .send();
+
+    let error_string;
+
+    match response {
+        Err(e) => {
+            error_string = format!("Failed to send request: {:?}", e);
+        }
+        Ok(returned_response) => {
+            info!("Sent request successfully");
+            info!("Response: {:?}", returned_response);
+
+            match returned_response.json::<Value>() {
+                Err(e) => {
+                    error_string = format!("Failed to get json: {:?}", e);
+                }
+                Ok(json) => match json.get("choices") {
+                    None => {
+                        error_string = "Failed to get completions choices".to_string();
+                    }
+                    Some(choices) => match choices.get(0) {
+                        None => {
+                            error_string = "Failed to get first element of choices".to_string();
+                        }
+                        Some(data_first_element) => match data_first_element.get("message") {
+                            None => {
+                                error_string = "Failed to get message".to_string();
+                            }
+                            Some(message) => match message.get("content") {
+                                None => {
+                                    error_string = "Failed to get message content".to_string();
+                                }
+                                Some(content) => {
+                                    let content_as_string = content.to_string();
+                                    if content_as_string.contains("Response is approved") {
+                                        return Ok(());
+                                    } else {
+                                        error_string = content_as_string;
+                                    }
+                                }
+                            },
+                        },
+                    },
+                },
+            }
+        }
+    }
+
+    error!("Failed to check prompt: {:?}", error_string);
+    return Err(error_string);
 }
 
 fn send_message_to_all_players<T>(
@@ -238,14 +382,6 @@ fn progress_round(
 ) {
     match room_state.game_state {
         GameState::ImageCreation => {
-            room_state.game_state = GameState::ImageGeneration;
-
-            let mut paused_timer = Timer::from_seconds(10.0, TimerMode::Once);
-            paused_timer.pause();
-
-            timer.0 = paused_timer;
-        }
-        GameState::ImageGeneration => {
             room_state.game_state = GameState::BiddingRound;
             room_state.setup_next_round();
             timer.0 = Timer::from_seconds(BIDDING_ROUND_TIME, TimerMode::Once);
@@ -340,48 +476,24 @@ fn find_and_handle_room<T, Q>(
     }
 }
 
-fn create_new_room_state(mut commands: Commands, room_code: &String) -> Entity {
-    // Else create a new entity with room state
-    let new_room_entity = commands.spawn(PublicRoom).id();
-
-    let new_room_state = RoomState {
-        room_id: new_room_entity.index(),
-        players: vec![],
-        game_state: GameState::WaitingRoom,
-        current_art_bid: ArtBidInfo::default(),
-        prompts_per_player: 2,
-        remaining_prompts: vec![],
-        used_prompts: vec![],
-        received_prompt_count: 0,
-        room_code: room_code.clone(),
-    };
-
-    let mut inserted_timer = Timer::from_seconds(5.0, TimerMode::Once);
-    inserted_timer.pause();
-
-    commands
-        .entity(new_room_entity)
-        .insert(RoundTimer(inserted_timer));
-    commands.entity(new_room_entity).insert(new_room_state);
-    commands
-        .entity(new_room_entity)
-        .insert(RoomStateServerInfo::default());
-
-    new_room_entity
-}
-
 // === Scene handling functions ===
 
 // === Core functionality ===
-fn setup_connections(mut image_generation_info: ResMut<ImageGenerationInfo>) {
+fn setup_connections(mut azure_endpoint_info: ResMut<AzureEndpointInfo>) {
     dotenv::dotenv().ok();
     let azure_ai_image_key =
         env::var("AZURE_AI_IMAGE_KEY").expect("AZURE_AI_IMAGE_KEY must be set");
     let azure_ai_image_endpoint =
         env::var("AZURE_AI_IMAGE_ENDPOINT").expect("AZURE_AI_IMAGE_ENDPOINT must be set");
+    let azure_ai_completions_key =
+        env::var("AZURE_AI_COMPLETIONS_KEY").expect("AZURE_AI_COMPLETIONS_KEY must be set");
+    let azure_ai_completions_endpoint = env::var("AZURE_AI_COMPLETIONS_ENDPOINT")
+        .expect("AZURE_AI_COMPLETIONS_ENDPOINT must be set");
 
-    image_generation_info.endpoint = azure_ai_image_endpoint;
-    image_generation_info.api_key = azure_ai_image_key;
+    azure_endpoint_info.image_gen_endpoint = azure_ai_image_endpoint;
+    azure_endpoint_info.image_gen_key = azure_ai_image_key;
+    azure_endpoint_info.completions_endpoint = azure_ai_completions_endpoint;
+    azure_endpoint_info.completions_key = azure_ai_completions_key;
 }
 
 fn setup_networking(
@@ -454,11 +566,16 @@ fn tick_timers(time: Res<Time>, mut query: Query<&mut RoundTimer>) {
 }
 
 fn handle_timer_events(
-    mut query: Query<(Entity, &mut RoomState, &mut RoundTimer)>,
+    mut query: Query<(
+        Entity,
+        &mut RoomState,
+        &mut RoomStateServerInfo,
+        &mut RoundTimer,
+    )>,
     mut commands: Commands,
     net: Res<Network<WebSocketProvider>>,
 ) {
-    for (entity, mut room_state, mut timer) in query.iter_mut() {
+    for (entity, mut room_state, mut _room_state_server_info, mut timer) in query.iter_mut() {
         if timer.0.finished() {
             info!("Timer finished for room {}", room_state.room_id);
             progress_round(
@@ -513,71 +630,203 @@ fn handle_image_generation_tasks(
     mut query: Query<(
         Entity,
         &mut RoomState,
+        &mut RoomStateServerInfo,
+        &mut RoundTimer,
+    )>,
+) {
+    for (entity, mut room_state, mut room_state_server_info, mut timer) in query.iter_mut() {
+        for compute_task_info in room_state_server_info.image_task_list.iter_mut() {
+            if let Some(string_option) =
+                future::block_on(future::poll_once(&mut compute_task_info.task))
+            {
+                info!(
+                    "Handling result of image generation task: {:?}",
+                    compute_task_info
+                );
+
+                if let Some(string_value) = string_option {
+                    info!("Image generation completed: {:?}", string_value);
+                    compute_task_info.prompt_data.prompt.image_url = string_value.clone();
+                    compute_task_info.status = TaskCompletionStatus::Completed;
+
+                    // Add the prompt to the remaining prompts
+                    let completed_prompt =
+                        std::mem::take(&mut compute_task_info.prompt_data.prompt);
+
+                    room_state.remaining_prompts.push(completed_prompt);
+
+                    // Send completed prompt to player
+                    let mut return_prompt_data = compute_task_info.prompt_data.clone();
+                    return_prompt_data.state = PromptState::FullyCompleted;
+
+                    match net.send_message(
+                        ConnectionId {
+                            id: return_prompt_data.prompt.owner_id,
+                        },
+                        return_prompt_data,
+                    ) {
+                        Ok(_) => info!("Sent prompt info successfully",),
+                        Err(e) => {
+                            error!("Failed to send message: {:?}", e);
+                        }
+                    }
+                } else {
+                    error!("Task failed to complete: {:?}", compute_task_info);
+                    compute_task_info.status = TaskCompletionStatus::Error;
+                    // TODO: Handle if error state fails
+                }
+            }
+        }
+        // Remove all finished tasks
+        room_state_server_info
+            .image_task_list
+            .retain(|task| task.status == TaskCompletionStatus::InProgress);
+
+        // If all tasks are completed, progress the round
+        if room_state.get_completed_prompt_count()
+            == room_state.players.len() as u32 * room_state.prompts_per_player
+        {
+            info!(
+                "All tasks are completed for room {}, progressing to next round",
+                room_state.room_id
+            );
+            progress_round(
+                room_state.deref_mut(),
+                timer.deref_mut(),
+                &mut commands,
+                entity,
+                &net,
+            );
+
+            // Send updated room state to all players
+            let room_state_deref_mut = room_state.deref_mut();
+            match send_message_to_all_players::<RoomState>(
+                &room_state_deref_mut,
+                &room_state_deref_mut,
+                &net,
+            ) {
+                Ok(_) => info!(
+                    "Updated player state for all players in room {}",
+                    room_state.room_id
+                ),
+                Err(e) => error!("Failed to send message: {:?}", e),
+            }
+        }
+    }
+}
+
+fn handle_check_prompt_tasks(
+    net: Res<Network<WebSocketProvider>>,
+    mut query: Query<(
+        Entity,
+        &mut RoomState,
         &mut RoundTimer,
         &mut RoomStateServerInfo,
     )>,
+    azure_endpoint_info: Res<AzureEndpointInfo>,
+    mut global_server_values: ResMut<GlobalServerValues>,
 ) {
-    for (entity, mut room_state, mut timer, mut room_state_server_info) in query.iter_mut() {
-        if room_state.game_state == GameState::ImageGeneration {
-            for compute_task_info in room_state_server_info.task_list.iter_mut() {
-                if let Some(string_option) =
+    for (_entity, _room_state, _timer, mut room_state_server_info) in query.iter_mut() {
+        if room_state_server_info.prompt_task_list.len() > 0 {
+            let mut new_image_tasks = Vec::new();
+
+            for compute_task_info in room_state_server_info.prompt_task_list.iter_mut() {
+                if let Some(prompt_check_success) =
                     future::block_on(future::poll_once(&mut compute_task_info.task))
                 {
                     info!(
-                        "Handling result of image generation task: {:?}",
+                        "Handling result of check prompt task: {:?}",
                         compute_task_info
                     );
 
-                    if let Some(string_value) = string_option {
-                        info!("Task completed successfully: {:?}", string_value);
-                        compute_task_info.prompt_to_complete.image_url = string_value.clone();
-                        compute_task_info.status = TaskCompletionStatus::Completed;
+                    match prompt_check_success {
+                        Ok(_) => {
+                            info!("Prompt check completed successfully");
+                            compute_task_info.status = TaskCompletionStatus::Completed;
 
-                        // Add the prompt to the remaining prompts
-                        let completed_prompt =
-                            std::mem::take(&mut compute_task_info.prompt_to_complete);
+                            // Create a task to get the image URL for each prompt
+                            let thread_pool = AsyncComputeTaskPool::get();
 
-                        room_state.remaining_prompts.push(completed_prompt);
-                    } else {
-                        error!("Task failed to complete: {:?}", compute_task_info);
-                        compute_task_info.status = TaskCompletionStatus::Error;
-                        // TODO: Handle if error state fails
+                            let endpoint = azure_endpoint_info.image_gen_endpoint.clone();
+                            let api_key = azure_endpoint_info.image_gen_key.clone();
+                            let input_string =
+                                compute_task_info.prompt_data.prompt.prompt_answer.clone();
+
+
+                            if global_server_values.next_available_server_time < Utc::now() {
+                                global_server_values.next_available_server_time =
+                                    Utc::now();
+                            } 
+
+                            let time_to_wait = (global_server_values.next_available_server_time
+                                - Utc::now())
+                            .num_seconds();
+
+                            global_server_values.next_available_server_time = global_server_values.next_available_server_time + Duration::from_secs(IMAGE_GEN_TIMEOUT_SECS);
+
+                            info!("Starting image generation task in {} seconds", time_to_wait);
+
+                            let task = thread_pool.spawn(async move {
+                                std::thread::sleep(Duration::from_secs(time_to_wait as u64));
+                                get_image_url(input_string, endpoint, api_key).await
+                            });
+
+                            new_image_tasks.push(ImageGenerationTask {
+                                task,
+                                prompt_data: compute_task_info.prompt_data.clone(),
+                                status: TaskCompletionStatus::InProgress,
+                            });
+
+                            // Send completed prompt to player
+                            let mut return_prompt_data = compute_task_info.prompt_data.clone();
+                            return_prompt_data.state = PromptState::PromptCompleted;
+
+                            match net.send_message(
+                                ConnectionId {
+                                    id: return_prompt_data.prompt.owner_id,
+                                },
+                                return_prompt_data,
+                            ) {
+                                Ok(_) => info!("Sent prompt info successfully",),
+                                Err(e) => {
+                                    error!("Failed to send message: {:?}", e);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            error!("Task failed to complete: {:?}", e);
+                            compute_task_info.status = TaskCompletionStatus::Error;
+
+                            let mut return_prompt_data = compute_task_info.prompt_data.clone();
+
+                            // Send an error message to the player
+                            return_prompt_data.error_message = e.clone();
+                            return_prompt_data.state = PromptState::Error;
+                            match net.send_message(
+                                ConnectionId {
+                                    id: return_prompt_data.prompt.owner_id,
+                                },
+                                return_prompt_data,
+                            ) {
+                                Ok(_) => info!("Sent prompt info successfully",),
+                                Err(e) => {
+                                    error!("Failed to send message: {:?}", e);
+                                }
+                            }
+                        }
                     }
                 }
             }
+
+            // Add new image tasks to the list
+            room_state_server_info
+                .image_task_list
+                .extend(new_image_tasks);
+
             // Remove all finished tasks
             room_state_server_info
-                .task_list
+                .prompt_task_list
                 .retain(|task| task.status == TaskCompletionStatus::InProgress);
-
-            // If all tasks are completed, progress the round
-            if room_state_server_info.task_list.is_empty() {
-                info!(
-                    "All tasks are completed for room {}, progressing to next round",
-                    room_state.room_id
-                );
-                progress_round(
-                    room_state.deref_mut(),
-                    timer.deref_mut(),
-                    &mut commands,
-                    entity,
-                    &net,
-                );
-
-                // Send updated room state to all players
-                let room_state_deref_mut = room_state.deref_mut();
-                match send_message_to_all_players::<RoomState>(
-                    &room_state_deref_mut,
-                    &room_state_deref_mut,
-                    &net,
-                ) {
-                    Ok(_) => info!(
-                        "Updated player state for all players in room {}",
-                        room_state.room_id
-                    ),
-                    Err(e) => error!("Failed to send message: {:?}", e),
-                }
-            }
         }
     }
 }
@@ -619,7 +868,7 @@ fn room_join_request(
 
             let new_room_entity = commands.spawn(PublicRoom).id();
 
-            let mut new_room_state = RoomState {
+            let new_room_state = RoomState {
                 room_id: new_room_entity.index(),
                 players: vec![Player::new(
                     new_message.source().id,
@@ -630,7 +879,6 @@ fn room_join_request(
                 prompts_per_player: 2,
                 remaining_prompts: vec![],
                 used_prompts: vec![],
-                received_prompt_count: 0,
                 room_code: new_message.room_code.clone(),
             };
 
@@ -697,48 +945,46 @@ fn start_game_request(
 
             // Send initial prompts to all players
             for player in room_state.players.iter() {
-                let mut prompt_list = Vec::new();
-
                 for _i in 0..room_state.prompts_per_player {
                     let new_prompt = PromptInfoData {
-                        prompt_text: String::default(),
+                        prompt_text: "A labrador with antlers".to_string(),
                         prompt_answer: String::default(),
                         image_url: String::default(),
                         owner_id: player.id,
                     };
-                    prompt_list.push(new_prompt);
-                }
-
-                let new_prompt_data = PromptInfoDataRequest {
-                    prompt_list: prompt_list,
-                    room_id: room_state.room_id,
-                };
-
-                match net.send_message(ConnectionId { id: player.id }, new_prompt_data) {
-                    Ok(_) => info!(
-                        "Sent prompt info to {} with id {}",
-                        player.username, player.id
-                    ),
-                    Err(e) => {
-                        error!("Failed to send message: {:?}", e);
+                    let new_prompt_data = PromptInfoDataRequest {
+                        prompt: new_prompt,
+                        room_id: room_state.room_id,
+                        front_end_prompt_index: None,
+                        state: PromptState::Proposed,
+                        error_message: String::default(),
+                    };
+                    match net.send_message(ConnectionId { id: player.id }, new_prompt_data) {
+                        Ok(_) => info!(
+                            "Sent prompt info to {} with id {}",
+                            player.username, player.id
+                        ),
+                        Err(e) => {
+                            error!("Failed to send message: {:?}", e);
+                        }
                     }
                 }
             }
 
             // Set game timer
-            timer.0 = Timer::from_seconds(IMAGE_CREATION_TIME, TimerMode::Once);
+            timer.0 = Timer::from_seconds(10.0, TimerMode::Once);
+            timer.0.pause();
 
             // Set clean up timer
             commands
                 .entity(*entity)
                 .insert(GameCleanupTimer(Timer::from_seconds(
-                    (IMAGE_CREATION_TIME
-                        + (BIDDING_ROUND_TIME + BIDDING_ROUND_END_TIME)
+                    ((BIDDING_ROUND_TIME + BIDDING_ROUND_END_TIME)
                             * room_state.prompts_per_player as f32
                             * room_state.players.len() as f32
                         + END_SCORE_SCREEN_TIME
-                        + 10.0)
-                        * 2.0, // Add a 2 x safety to be safe
+                        + 130.0 ) // For creating the initial images
+                        * 4.0, // Add a 4 x safety to be safe
                     TimerMode::Once,
                 )));
 
@@ -758,71 +1004,68 @@ fn start_game_request(
 fn prompt_info_data_update(
     new_messages: EventReader<NetworkData<PromptInfoDataRequest>>,
     net: Res<Network<WebSocketProvider>>,
-    mut commands: Commands,
     mut query: Query<(
         Entity,
         &mut RoomState,
         &mut RoundTimer,
         &mut RoomStateServerInfo,
     )>,
-    image_generation_info: Res<ImageGenerationInfo>,
+    azure_edpoint_info: Res<AzureEndpointInfo>,
 ) {
     find_and_handle_room(
         new_messages,
         &net,
         &mut query,
-        |mut room_state, timer, room_state_server_info, net, entity, message| {
+        |room_state, _timer, room_state_server_info, net, _entity, message| {
             info!("Received prompt info data update: {:?}", message);
             let message_source = message.source();
             let incoming_connection_id = message_source.id;
 
             for player in room_state.players.iter_mut() {
                 if player.id == incoming_connection_id {
-                    for (_prompt_index, prompt) in message.prompt_list.iter().enumerate() {
-                        if prompt.prompt_answer != "" {
-                            info!("Generating image for prompt: {:?}", prompt);
+                    if message.prompt.prompt_answer != "" {
+                        info!("Generating image for prompt: {:?}", message.prompt);
+                        // Create a task to check the prompt
+                        let thread_pool = AsyncComputeTaskPool::get();
 
-                            room_state.received_prompt_count += 1;
+                        let prompt_text = message.prompt.prompt_text.clone();
+                        let prompt_answer = message.prompt.prompt_answer.clone();
+                        let azure_endpoint_url = azure_edpoint_info.completions_endpoint.clone();
+                        let azure_endpoint_key = azure_edpoint_info.completions_key.clone();
 
-                            // Create a task to get the image URL for each prompt
-                            let thread_pool = AsyncComputeTaskPool::get();
+                        let task = thread_pool.spawn(async {
+                            check_prompt_answer(
+                                prompt_text,
+                                prompt_answer,
+                                azure_endpoint_url,
+                                azure_endpoint_key,
+                            )
+                            .await
+                        });
 
-                            let endpoint = image_generation_info.endpoint.clone();
-                            let api_key = image_generation_info.api_key.clone();
-                            let input_string = prompt.prompt_answer.clone();
-
-                            let task = thread_pool.spawn(async {
-                                get_image_url(input_string, endpoint, api_key).await
-                            });
-                            room_state_server_info.task_list.push(ImageGenerationTask {
+                        room_state_server_info
+                            .prompt_task_list
+                            .push(CheckPromptTask {
                                 task,
-                                prompt_to_complete: prompt.clone(),
+                                prompt_data: message.additional_clone(),
                                 status: TaskCompletionStatus::InProgress,
                             });
+                    } else {
+                        // Prompt is invalid send error
+                        let mut return_prompt = message.additional_clone();
+                        return_prompt.error_message = "Prompt is invalid".to_string();
+                        return_prompt.state = PromptState::Error;
+                        match net.send_message(ConnectionId { id: player.id }, return_prompt) {
+                            Ok(_) => info!(
+                                "Sent prompt info to {} with id {}",
+                                player.username, player.id
+                            ),
+                            Err(e) => {
+                                error!("Failed to send message: {:?}", e);
+                            }
                         }
                     }
                 }
-            }
-
-            // If we have enough prompts, progress the round
-            if room_state.received_prompt_count
-                == room_state.players.len() as u32 * room_state.prompts_per_player
-            {
-                progress_round(room_state, timer, &mut commands, *entity, &net);
-                let room_state_deref_mut = room_state.deref_mut();
-                match send_message_to_all_players::<RoomState>(
-                    &room_state_deref_mut,
-                    &room_state_deref_mut,
-                    &net,
-                ) {
-                    Ok(_) => info!(
-                        "Received all prompts and now progressing in room {}",
-                        room_state.room_id
-                    ),
-                    Err(e) => error!("Failed to send message: {:?}", e),
-                }
-            } else {
-                info!("Player prompts are not fully completed: {:?}", room_state);
             }
         },
     );
@@ -844,7 +1087,7 @@ fn game_action_request_update(
         new_messages,
         &net,
         &mut query,
-        |mut room_state, mut timer, _room_state_server_info, net, entity, message| {
+        |mut room_state, mut timer, mut _room_state_server_info, net, entity, message| {
             info!("Received game action request: {:?}", message);
 
             // Handle the action

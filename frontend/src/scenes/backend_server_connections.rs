@@ -13,6 +13,8 @@ use bevy_eventwork::{
 use bevy_eventwork_mod_websockets::*;
 use server_responses::*;
 
+use super::FrontEndPromptList;
+
 const SERVER_CONNECTION_ID: ConnectionId = ConnectionId { id: 0 };
 
 // Send message functions
@@ -29,7 +31,11 @@ pub fn send_random_room_request(username: &str, net: &Res<Network<WebSocketProvi
     }
 }
 
-pub fn send_private_room_request(username: &str, room_code: &str, net: &Res<Network<WebSocketProvider>>) {
+pub fn send_private_room_request(
+    username: &str,
+    room_code: &str,
+    net: &Res<Network<WebSocketProvider>>,
+) {
     let request = RoomJoinRequest {
         username: username.to_string(),
         room_code: room_code.to_string(),
@@ -50,11 +56,14 @@ pub fn send_start_game_request(room_id: u32, net: Res<Network<WebSocketProvider>
     }
 }
 
-pub fn send_completed_prompts(
-    prompt_info_data: PromptInfoDataRequest,
-    net: Res<Network<WebSocketProvider>>,
+pub fn send_completed_prompt(
+    prompt_info_data: &mut PromptInfoDataRequest,
+    prompt_index: usize,
+    net: &Res<Network<WebSocketProvider>>,
 ) {
-    match net.send_message(SERVER_CONNECTION_ID, prompt_info_data) {
+    prompt_info_data.state = PromptState::SentForFeedback;
+    prompt_info_data.front_end_prompt_index = Some(prompt_index);
+    match net.send_message(SERVER_CONNECTION_ID, prompt_info_data.clone()) {
         Ok(_) => info!("Sent completed prompts"),
         Err(e) => error!("Failed to send message: {:?}", e),
     }
@@ -75,24 +84,24 @@ pub fn send_bid_action(requestor_player_id: u32, room_id: u32, net: &Network<Web
     }
 }
 
-pub fn send_end_round_action(
-    requestor_player_id: u32,
-    room_id: u32,
-    net: &Network<WebSocketProvider>,
-) {
-    match net.send_message(
-        SERVER_CONNECTION_ID,
-        GameActionRequest {
-            requestor_player_id,
-            target_player_id: 0,
-            room_id,
-            action: GameAction::EndRound,
-        },
-    ) {
-        Ok(_) => info!("Player: {} sent end round action", requestor_player_id),
-        Err(e) => error!("Failed to send message: {:?}", e),
-    }
-}
+// pub fn send_end_round_action(
+//     requestor_player_id: u32,
+//     room_id: u32,
+//     net: &Network<WebSocketProvider>,
+// ) {
+//     match net.send_message(
+//         SERVER_CONNECTION_ID,
+//         GameActionRequest {
+//             requestor_player_id,
+//             target_player_id: 0,
+//             room_id,
+//             action: GameAction::EndRound,
+//         },
+//     ) {
+//         Ok(_) => info!("Player: {} sent end round action", requestor_player_id),
+//         Err(e) => error!("Failed to send message: {:?}", e),
+//     }
+// }
 
 pub fn send_force_bid_action(
     requestor_player_id: u32,
@@ -150,11 +159,25 @@ fn room_state_response(
 
 fn prompt_info_response(
     mut new_messages: EventReader<NetworkData<PromptInfoDataRequest>>,
-    mut prompt_info_data: ResMut<PromptInfoDataRequest>,
+    mut front_end_prompt_list: ResMut<FrontEndPromptList>,
 ) {
     for new_message in new_messages.read() {
         info!("Received new prompt info message: {:?}", new_message);
-        *prompt_info_data = new_message.additional_clone();
+        if new_message.state == PromptState::Proposed {
+            front_end_prompt_list
+                .prompt_data_list
+                .push(new_message.additional_clone());
+        } else {
+            if let Some(prompt_index) = new_message.front_end_prompt_index {
+                if front_end_prompt_list.prompt_data_list.get(prompt_index).is_some() {
+                    front_end_prompt_list.prompt_data_list[prompt_index] = new_message.additional_clone();
+                } else {
+                    error!("Prompt not found when accessing index");
+                }
+            } else {
+                error!("Prompt index not found in prompt info response");
+            }
+        }
     }
 }
 

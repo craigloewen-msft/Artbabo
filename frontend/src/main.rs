@@ -26,10 +26,9 @@ fn main() {
     ))
     .insert_resource(resources::PlayerSettings {
         username: String::new(),
-        button_submitted: false,
     })
     .insert_resource(resources::CurrentPlayerData { player_id: 0 })
-    .insert_resource(PromptInfoDataRequest::default())
+    .insert_resource(resources::FrontEndPromptList::default())
     .insert_resource(RoundEndInfo::default())
     .insert_resource(GameEndInfo::default())
     .insert_resource(RoundTimer(Timer::from_seconds(5.0, TimerMode::Once)))
@@ -54,7 +53,7 @@ fn update_camera_scaling(
     mut windows: Query<&mut Window, With<PrimaryWindow>>,
     mut query: Query<&mut OrthographicProjection>,
 ) {
-    for mut window in windows.iter_mut() {
+    for window in windows.iter_mut() {
         let aspect_ratio = window.width() / window.height();
 
         for mut projection in query.iter_mut() {

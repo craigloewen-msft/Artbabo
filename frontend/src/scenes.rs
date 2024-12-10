@@ -186,58 +186,64 @@ pub fn add_waiting_room_scenes(app: &mut App) {
 
 pub fn draw_image_creation_ui(
     mut contexts: EguiContexts,
-    mut player_settings: ResMut<PlayerSettings>,
-    mut prompt_info_data: ResMut<PromptInfoDataRequest>,
-    round_timer: ResMut<RoundTimer>,
+    mut front_end_prompt_list: ResMut<FrontEndPromptList>,
     net: Res<Network<WebSocketProvider>>,
 ) {
     egui::Area::new("image_creation_area".into())
         .anchor(Align2::CENTER_TOP, (0., 0.))
         .show(contexts.ctx_mut(), |ui| {
             ui.vertical(|ui| {
-                // Show timer information at top
-                ui.label("Time left: ");
-                ui.label(format!("{:.2}", round_timer.0.remaining_secs()));
-
                 ui.label("Fill out these prompts");
                 ui.add_space(10.0); // Add some space between the label and the text box
 
-                for index in 0..prompt_info_data.prompt_list.len() {
+                for index in 0..front_end_prompt_list.prompt_data_list.len() {
                     ui.vertical(|ui| {
-                        ui.label(prompt_info_data.prompt_list[index].prompt_text.clone());
-                        ui.text_edit_multiline(
-                            &mut prompt_info_data.prompt_list[index].prompt_answer,
-                        );
+                        let prompt_data_message =
+                            &mut front_end_prompt_list.prompt_data_list[index];
+                        let prompt = &mut prompt_data_message.prompt;
+                        ui.label(prompt.prompt_text.clone());
+                        if prompt_data_message.state == PromptState::Error {
+                            // Show label in red if there is an error
+                            ui.label(
+                                egui::RichText::new(prompt_data_message.error_message.clone())
+                                    .color(egui::Color32::from_rgb(255, 100, 100)),
+                            );
+                        } else if prompt_data_message.state == PromptState::PromptCompleted {
+                            // Show label in green if the prompt is completed
+                            ui.label(
+                                egui::RichText::new("Prompt completed")
+                                    .color(egui::Color32::from_rgb(100, 255, 100)),
+                            );
+                        } else if prompt_data_message.state == PromptState::FullyCompleted {
+                            ui.label(
+                                egui::RichText::new("Fully completed - image generated")
+                                    .color(egui::Color32::from_rgb(100, 255, 100)),
+                            );
+                        }
+
+                        ui.text_edit_multiline(&mut prompt.prompt_answer);
                         ui.add_space(10.0); // Add some space between the label and the text box
+
+                        let button = ui.add_enabled(
+                            prompt_data_message.state == PromptState::Proposed
+                                || prompt_data_message.state == PromptState::Error,
+                            egui::Button::new("Submit prompt"),
+                        );
+
+                        if button.clicked() {
+                            send_completed_prompt(prompt_data_message, index, &net);
+                        }
                     });
-                }
-
-                ui.add_space(15.0); // Add some space between the label and the text box
-
-                let button = ui.add_enabled(
-                    !player_settings.button_submitted,
-                    egui::Button::new("Start Game"),
-                );
-
-                if button.clicked() {
-                    player_settings.button_submitted = true;
-                    // Handle the submit button click event
-                    send_completed_prompts(prompt_info_data.clone(), net);
-                    // Add your submit logic here
                 }
             });
         });
 }
 
-pub fn on_enter_image_creation(mut commands: Commands, mut round_timer: ResMut<RoundTimer>) {
+pub fn on_enter_image_creation(mut commands: Commands) {
     // Reset the button submitted state
     commands.insert_resource(PlayerSettings {
         username: String::new(),
-        button_submitted: false,
     });
-
-    // Create a new round timer
-    *round_timer = RoundTimer(Timer::from_seconds(IMAGE_CREATION_TIME, TimerMode::Once));
 }
 
 pub fn add_image_creation_scenes(app: &mut App) {
@@ -246,24 +252,6 @@ pub fn add_image_creation_scenes(app: &mut App) {
         draw_image_creation_ui.run_if(in_state(GameState::ImageCreation)),
     )
     .add_systems(OnEnter(GameState::ImageCreation), on_enter_image_creation);
-}
-
-// === Image generation scenes ===
-
-pub fn draw_image_generation_ui(mut contexts: EguiContexts) {
-    // Draw a 'please wait message'
-    egui::Area::new("image_generation_area".into())
-        .anchor(Align2::CENTER_TOP, (0., 0.))
-        .show(contexts.ctx_mut(), |ui| {
-            ui.label("Please wait for all images to be generated");
-        });
-}
-
-pub fn add_image_generation_scenes(app: &mut App) {
-    app.add_systems(
-        Update,
-        draw_image_generation_ui.run_if(in_state(GameState::ImageGeneration)),
-    );
 }
 
 // === Bidding round scenes ===
@@ -335,17 +323,14 @@ pub fn draw_bidding_round_ui(
                                 if let Ok(text) = resp.text().await {
                                     info!("Response body: {}", text);
                                     panic!();
-                                    None
                                 } else {
                                     panic!();
-                                    None
                                 }
                             }
                         }
                         Err(e) => {
                             info!("Failed to fetch url at all: {:?}", e);
                             panic!();
-                            None
                         }
                     }
                 });
@@ -437,7 +422,7 @@ pub fn draw_bidding_round_ui(
                 ui.horizontal(|ui| {
                     for player in room_state.players.iter() {
                         ui.vertical(|ui| {
-                            if (player.id == current_player_data.player_id) {
+                            if player.id == current_player_data.player_id {
                                 ui.label(
                                     RichText::new(format!("{} (You)", player.username)).strong(),
                                 );
@@ -447,7 +432,7 @@ pub fn draw_bidding_round_ui(
 
                             ui.label(format!("Force bids: {}", player.force_bids_left));
 
-                            if (player.id == current_player_data.player_id) {
+                            if player.id == current_player_data.player_id {
                                 let button = ui.add_enabled(
                                     *game_state.get() == GameState::BiddingRound,
                                     egui::Button::new("Bid")
@@ -628,7 +613,6 @@ pub fn add_scenes(app: &mut App) {
     add_intro_scenes(app);
     add_waiting_room_scenes(app);
     add_image_creation_scenes(app);
-    add_image_generation_scenes(app);
     add_backend_server_connections(app);
     add_bidding_round_scenes(app);
     add_end_score_screen_scenes(app);

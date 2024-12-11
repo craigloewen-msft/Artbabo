@@ -358,6 +358,12 @@ pub fn draw_bidding_round_ui(
         }
     }
 
+    egui::Area::new("some_test".into())
+        .anchor(Align2::LEFT_TOP, (0., 0.))
+        .show(contexts.ctx_mut(), |ui| {
+            ui.label(format!("Hints: {:?}", current_player.hints));
+        });
+
     egui::Area::new("round_area".into())
         .anchor(Align2::CENTER_TOP, (0., 0.))
         .show(contexts.ctx_mut(), |ui| {

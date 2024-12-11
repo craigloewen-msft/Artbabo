@@ -50,6 +50,7 @@ pub struct Player {
     pub money: i32,
     pub id: u32,
     pub force_bids_left: u32,
+    pub hints: Vec<String>,
 }
 
 // Make a constructor for Player with a string input
@@ -60,6 +61,7 @@ impl Player {
             money: 3000,
             id,
             force_bids_left: 2,
+            hints: Vec::new(),
         }
     }
 }

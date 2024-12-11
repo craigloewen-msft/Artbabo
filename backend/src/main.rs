@@ -78,11 +78,18 @@ struct PromptGenerationTask {
     status: TaskCompletionStatus,
 }
 
+#[derive(Debug, Component)]
+struct HintGenerationTask {
+    task: Task<Result<Vec<String>, String>>,
+    status: TaskCompletionStatus,
+}
+
 #[derive(Component, Default)]
 struct RoomStateServerInfo {
     image_task_list: Vec<ImageGenerationTask>,
     prompt_task_list: Vec<CheckPromptTask>,
     prompt_generation_task_list: Vec<PromptGenerationTask>,
+    hint_generation_task_list: Vec<HintGenerationTask>,
 }
 
 #[derive(Component)]
@@ -115,6 +122,7 @@ fn main() {
         .add_systems(Update, handle_image_generation_tasks)
         .add_systems(Update, handle_check_prompt_tasks)
         .add_systems(Update, handle_prompt_generation_tasks)
+        .add_systems(Update, handle_hint_generation_tasks)
         .listen_for_message::<RoomJoinRequest, WebSocketProvider>()
         .add_systems(Update, room_join_request)
         .listen_for_message::<StartGameRequest, WebSocketProvider>()
@@ -430,6 +438,21 @@ async fn generate_prompt_texts(
     return Ok(unique_prompts);
 }
 
+async fn generate_hints(
+    num_hints: u32,
+    rng: &mut StdRng,
+    completions_endpoint: String,
+    completions_key: String,
+) -> Result<Vec<String>, String> {
+    let mut hints_list = Vec::<String>::new();
+
+    for _i in 0..num_hints {
+        hints_list.push("Hello".to_string());
+    }
+
+    Ok(hints_list)
+}
+
 async fn get_chat_completion(
     request_body: Value,
     completions_endpoint: &String,
@@ -534,6 +557,24 @@ where
 
 //     Ok(())
 // }
+
+fn check_if_room_is_prepped(room_state: &RoomState) -> bool {
+    if room_state.players.len() == 0 {
+        return false;
+    }
+
+    if (room_state.get_completed_prompt_count()
+        == room_state.players.len() as u32 * room_state.prompts_per_player)
+        && room_state
+            .players
+            .iter()
+            .all(|player| player.hints.len() == 2)
+    {
+        return true;
+    } else {
+        return false;
+    }
+}
 
 fn progress_round(
     room_state: &mut RoomState,
@@ -903,10 +944,8 @@ fn handle_image_generation_tasks(
             .image_task_list
             .retain(|task| task.status == TaskCompletionStatus::InProgress);
 
-        // If all tasks are completed, progress the round
-        if room_state.get_completed_prompt_count()
-            == room_state.players.len() as u32 * room_state.prompts_per_player
-        {
+        // If room is ready to go then proceed
+        if check_if_room_is_prepped(&room_state) {
             info!(
                 "All tasks are completed for room {}, progressing to next round",
                 room_state.room_id
@@ -1054,99 +1093,229 @@ fn handle_prompt_generation_tasks(
         &mut RoundTimer,
         &mut RoomStateServerInfo,
     )>,
+    azure_endpoint_info: Res<AzureEndpointInfo>,
+    mut global_server_values: ResMut<GlobalServerValues>,
 ) {
     for (entity, mut room_state, mut timer, mut room_state_server_info) in query.iter_mut() {
-        for compute_task_info in room_state_server_info
-            .prompt_generation_task_list
-            .iter_mut()
-        {
-            if let Some(generated_prompt_list_result) =
-                future::block_on(future::poll_once(&mut compute_task_info.task))
+        if room_state_server_info.prompt_generation_task_list.len() > 0 {
+            let mut generate_hints_check = false;
+            for compute_task_info in room_state_server_info
+                .prompt_generation_task_list
+                .iter_mut()
             {
-                info!(
-                    "Handling result of prompt generation task: {:?}",
-                    compute_task_info
-                );
+                if let Some(generated_prompt_list_result) =
+                    future::block_on(future::poll_once(&mut compute_task_info.task))
+                {
+                    info!(
+                        "Handling result of prompt generation task: {:?}",
+                        compute_task_info
+                    );
 
-                match generated_prompt_list_result {
-                    Err(e) => {
-                        error!("Failed to generate prompts: {:?}", e);
-                        compute_task_info.status = TaskCompletionStatus::Error;
+                    match generated_prompt_list_result {
+                        Err(e) => {
+                            error!("Failed to generate prompts: {:?}", e);
+                            compute_task_info.status = TaskCompletionStatus::Error;
 
-                        // TODO: Handle this error
-                    }
-                    Ok(generated_prompt_list) => {
-                        let mut player_index = 0;
-                        let mut player_prompt_count = 0;
+                            // TODO: Handle this error
+                        }
+                        Ok(generated_prompt_list) => {
+                            let mut player_index = 0;
+                            let mut player_prompt_count = 0;
 
-                        compute_task_info.status = TaskCompletionStatus::Completed;
+                            compute_task_info.status = TaskCompletionStatus::Completed;
 
-                        info!("Generated prompts: {:?}", generated_prompt_list);
+                            info!("Generated prompts: {:?}", generated_prompt_list);
 
-                        for prompt_text in generated_prompt_list.iter() {
-                            let player = &room_state.players[player_index];
+                            // Send out prompts to all players
+                            for prompt_text in generated_prompt_list.iter() {
+                                let player = &room_state.players[player_index];
 
-                            let new_prompt = PromptInfoData {
-                                prompt_text: prompt_text.clone(),
-                                prompt_answer: String::default(),
-                                image_url: String::default(),
-                                owner_id: player.id,
-                            };
-                            let new_prompt_data = PromptInfoDataRequest {
-                                prompt: new_prompt,
-                                room_id: room_state.room_id,
-                                front_end_prompt_index: None,
-                                state: PromptState::Proposed,
-                                error_message: String::default(),
-                            };
+                                let new_prompt = PromptInfoData {
+                                    prompt_text: prompt_text.clone(),
+                                    prompt_answer: String::default(),
+                                    image_url: String::default(),
+                                    owner_id: player.id,
+                                };
+                                let new_prompt_data = PromptInfoDataRequest {
+                                    prompt: new_prompt,
+                                    room_id: room_state.room_id,
+                                    front_end_prompt_index: None,
+                                    state: PromptState::Proposed,
+                                    error_message: String::default(),
+                                };
 
-                            // Progress index counters
-                            player_prompt_count += 1;
-                            if player_prompt_count >= room_state.prompts_per_player {
-                                player_index += 1;
-                                player_prompt_count = 0;
-                            }
+                                // Progress index counters
+                                player_prompt_count += 1;
+                                if player_prompt_count >= room_state.prompts_per_player {
+                                    player_index += 1;
+                                    player_prompt_count = 0;
+                                }
 
-                            // Send out prompt
-                            match net.send_message(ConnectionId { id: player.id }, new_prompt_data)
-                            {
-                                Ok(_) => info!(
-                                    "Sent prompt info to {} with id {}",
-                                    player.username, player.id
-                                ),
-                                Err(e) => {
-                                    error!("Failed to send message: {:?}", e);
+                                // Send out prompt
+                                match net
+                                    .send_message(ConnectionId { id: player.id }, new_prompt_data)
+                                {
+                                    Ok(_) => info!(
+                                        "Sent prompt info to {} with id {}",
+                                        player.username, player.id
+                                    ),
+                                    Err(e) => {
+                                        error!("Failed to send message: {:?}", e);
+                                    }
                                 }
                             }
-                        }
 
-                        let room_state_deref_mut = room_state.deref_mut();
+                            generate_hints_check = true;
 
-                        progress_round(
-                            room_state_deref_mut,
-                            timer.deref_mut(),
-                            &mut commands,
-                            entity,
-                            &net,
-                        );
+                            // Update room state
+                            let room_state_deref_mut = room_state.deref_mut();
 
-                        match send_message_to_all_players::<RoomState>(
-                            &room_state_deref_mut,
-                            &room_state_deref_mut,
-                            &net,
-                        ) {
-                            Ok(_) => info!("Started game in room {}", room_state.room_id),
-                            Err(e) => error!("Failed to send message: {:?}", e),
+                            progress_round(
+                                room_state_deref_mut,
+                                timer.deref_mut(),
+                                &mut commands,
+                                entity,
+                                &net,
+                            );
+
+                            match send_message_to_all_players::<RoomState>(
+                                &room_state_deref_mut,
+                                &room_state_deref_mut,
+                                &net,
+                            ) {
+                                Ok(_) => info!("Started game in room {}", room_state.room_id),
+                                Err(e) => error!("Failed to send message: {:?}", e),
+                            }
                         }
                     }
                 }
             }
-        }
 
-        // Remove all finished tasks
-        room_state_server_info
-            .prompt_generation_task_list
-            .retain(|task| task.status == TaskCompletionStatus::InProgress);
+            // Remove all finished tasks
+            room_state_server_info
+                .prompt_generation_task_list
+                .retain(|task| task.status == TaskCompletionStatus::InProgress);
+
+            if generate_hints_check {
+                // Start generate hints task
+                let thread_pool = AsyncComputeTaskPool::get();
+
+                let number_of_hints =
+                    room_state.players.len() as u32 * room_state.prompts_per_player;
+                let azure_endpoint_url = azure_endpoint_info.completions_endpoint.clone();
+                let azure_endpoint_key = azure_endpoint_info.completions_key.clone();
+
+                let time_to_wait = increment_server_time(
+                    &mut global_server_values.next_available_prompt_server_time,
+                    PROMPT_GEN_TIMEOUT_SECS * number_of_hints as u64,
+                );
+
+                let mut rng = StdRng::from_entropy();
+
+                info!("Starting hint generation task in {} seconds", time_to_wait);
+
+                let task = thread_pool.spawn(async move {
+                    std::thread::sleep(Duration::from_secs(time_to_wait as u64));
+                    generate_hints(
+                        number_of_hints,
+                        &mut rng,
+                        azure_endpoint_url,
+                        azure_endpoint_key,
+                    )
+                    .await
+                });
+
+                room_state_server_info
+                    .hint_generation_task_list
+                    .push(HintGenerationTask {
+                        task,
+                        status: TaskCompletionStatus::InProgress,
+                    });
+            }
+        }
+    }
+}
+
+fn handle_hint_generation_tasks(
+    net: Res<Network<WebSocketProvider>>,
+    mut commands: Commands,
+    mut query: Query<(
+        Entity,
+        &mut RoomState,
+        &mut RoundTimer,
+        &mut RoomStateServerInfo,
+    )>,
+) {
+    for (entity, mut room_state, mut timer, mut room_state_server_info) in query.iter_mut() {
+        if (room_state_server_info.hint_generation_task_list.len() > 0) {
+            for compute_task_info in room_state_server_info.hint_generation_task_list.iter_mut() {
+                if let Some(generated_hint_list_result) =
+                    future::block_on(future::poll_once(&mut compute_task_info.task))
+                {
+                    info!(
+                        "Handling result of hint generation task: {:?}",
+                        compute_task_info
+                    );
+
+                    match generated_hint_list_result {
+                        Err(e) => {
+                            error!("Failed to generate hints: {:?}", e);
+                            compute_task_info.status = TaskCompletionStatus::Error;
+
+                            // TODO: Handle this error
+                        }
+                        Ok(generated_hint_list) => {
+                            let mut player_index = 0;
+                            let mut player_prompt_count = 0;
+
+                            compute_task_info.status = TaskCompletionStatus::Completed;
+
+                            info!("Generated hints: {:?}", generated_hint_list);
+
+                            for prompt_text in generated_hint_list.iter() {
+                                let player = &mut room_state.players[player_index];
+
+                                player.hints.push(prompt_text.clone());
+
+                                // Progress index counters
+                                player_prompt_count += 1;
+                                if player_prompt_count >= room_state.prompts_per_player {
+                                    player_index += 1;
+                                    player_prompt_count = 0;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Remove all finished tasks
+            room_state_server_info
+                .hint_generation_task_list
+                .retain(|task| task.status == TaskCompletionStatus::InProgress);
+
+            // If all image tasks are completed, then progress the round
+            if check_if_room_is_prepped(&room_state) {
+                let room_state_deref_mut = room_state.deref_mut();
+
+                progress_round(
+                    room_state_deref_mut,
+                    timer.deref_mut(),
+                    &mut commands,
+                    entity,
+                    &net,
+                );
+
+                match send_message_to_all_players::<RoomState>(
+                    &room_state_deref_mut,
+                    &room_state_deref_mut,
+                    &net,
+                ) {
+                    Ok(_) => info!("Started game in room {}", room_state.room_id),
+                    Err(e) => error!("Failed to send message: {:?}", e),
+                }
+            }
+        }
     }
 }
 
@@ -1250,7 +1419,7 @@ fn start_game_request(
         Without<InGame>,
     >,
     mut commands: Commands,
-    azure_edpoint_info: Res<AzureEndpointInfo>,
+    azure_endpoint_info: Res<AzureEndpointInfo>,
     mut global_server_values: ResMut<GlobalServerValues>,
 ) {
     find_and_handle_room(
@@ -1273,12 +1442,12 @@ fn start_game_request(
             let thread_pool = AsyncComputeTaskPool::get();
 
             let number_of_prompts = room_state.players.len() as u32 * room_state.prompts_per_player;
-            let azure_endpoint_url = azure_edpoint_info.completions_endpoint.clone();
-            let azure_endpoint_key = azure_edpoint_info.completions_key.clone();
+            let azure_endpoint_url = azure_endpoint_info.completions_endpoint.clone();
+            let azure_endpoint_key = azure_endpoint_info.completions_key.clone();
 
             let time_to_wait = increment_server_time(
                 &mut global_server_values.next_available_prompt_server_time,
-                PROMPT_GEN_TIMEOUT_SECS,
+                PROMPT_GEN_TIMEOUT_SECS * number_of_prompts as u64,
             );
 
             let mut rng = StdRng::from_entropy();
@@ -1330,7 +1499,7 @@ fn prompt_info_data_update(
         &mut RoundTimer,
         &mut RoomStateServerInfo,
     )>,
-    azure_edpoint_info: Res<AzureEndpointInfo>,
+    azure_endpoint_info: Res<AzureEndpointInfo>,
 ) {
     find_and_handle_room(
         new_messages,
@@ -1350,8 +1519,8 @@ fn prompt_info_data_update(
 
                         let prompt_text = message.prompt.prompt_text.clone();
                         let prompt_answer = message.prompt.prompt_answer.clone();
-                        let azure_endpoint_url = azure_edpoint_info.completions_endpoint.clone();
-                        let azure_endpoint_key = azure_edpoint_info.completions_key.clone();
+                        let azure_endpoint_url = azure_endpoint_info.completions_endpoint.clone();
+                        let azure_endpoint_key = azure_endpoint_info.completions_key.clone();
 
                         let task = thread_pool.spawn(async {
                             check_prompt_answer(

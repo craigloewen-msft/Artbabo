@@ -163,7 +163,7 @@ pub fn draw_waiting_room_ui(
                     if host.username == player_settings.username {
                         // Replace with actual current player username check
                         let button = ui.add_enabled(
-                            room_state.players.len() > 1,
+                            room_state.players.len() >= MIN_PLAYERS,
                             egui::Button::new("Start Game"),
                         );
                         if button.clicked() {

@@ -20,7 +20,9 @@ pub const BID_INCREASE_TIMER_VALUE: f32 = 1.0;
 pub const BID_INCREASE_TIMER_START_WINDOW: f32 = 10.0;
 
 pub const MAX_PLAYERS: usize = 8;
-pub const IMAGE_GEN_TIMEOUT_SECS : u64 = 60;
+pub const MIN_PLAYERS: usize = 2;
+pub const IMAGE_GEN_TIMEOUT_SECS : u64 = 10;
+pub const PROMPT_GEN_TIMEOUT_SECS : u64 = 2;
 
 #[derive(Component, Resource)]
 pub struct RoundTimer(pub Timer);
@@ -34,6 +36,7 @@ pub enum GameState {
     #[default]
     Intro,
     WaitingRoom,
+    PromptGenerationWaiting,
     ImageCreation,
     BiddingRound,
     BiddingRoundEnd,

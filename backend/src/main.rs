@@ -1,5 +1,4 @@
 use bevy::ecs::query::QueryFilter;
-use bevy::ecs::world::error;
 use bevy::log::Level;
 use bevy::prelude::*;
 use bevy::tasks::TaskPoolBuilder;
@@ -310,7 +309,7 @@ async fn generate_prompt_texts(
     // Get unique prompts for these three
     let mut unique_prompts: Vec<String> = Vec::new();
 
-    for i in 0..num_prompts_third {
+    for _i in 0..num_prompts_third {
         // Generate a random unique prompt and add it
 
         let request_body = json!({
@@ -364,7 +363,7 @@ async fn generate_prompt_texts(
 
     let mut similar_prompts: Vec<String> = Vec::new();
 
-    for i in 0..remaining_prompts_count {
+    for _i in 0..remaining_prompts_count {
         // Choose a random unique prompt
         match unique_prompts.choose(rng) {
             None => {
@@ -1258,7 +1257,7 @@ fn start_game_request(
         new_messages,
         &net,
         &mut query,
-        |mut room_state, timer, mut room_state_server_info, net, entity, _message| {
+        |mut room_state, timer, room_state_server_info, net, entity, _message| {
             info!("New start game request: {:?}", _message);
 
             // Choose number of prompts per player

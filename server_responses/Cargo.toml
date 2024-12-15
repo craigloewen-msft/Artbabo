@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-bevy = "0.14"
+bevy = "0.15"
 serde = "1.0"
 rand = "0.8"
-bevy_eventwork = { version = "0.9", default-features = false }
-bevy_eventwork_mod_websockets = "0.2"
+bevy_eventwork = { version = "0.10", default-features = false }
+bevy_eventwork_mod_websockets = "0.3.1"

@@ -5,14 +5,14 @@ edition = "2021"
 resolver = "2"
 
 [dependencies]
-bevy = "0.14"
-bevy_egui = { version="0.28", default-features = false, features=["default_fonts", "render"]}
+bevy = "0.15"
+bevy_egui = { version="0.31", default-features = false, features=["default_fonts", "render"]}
 serde = "1.0"
-bevy_eventwork = { version = "0.9", default-features = false }
-bevy_eventwork_mod_websockets = "0.2"
+bevy_eventwork = { version = "0.10", default-features = false }
+bevy_eventwork_mod_websockets = "0.3.1"
 url = "2.5.3"
 reqwest = { version = "0.11" }
-bevy_async_task = "0.2"
+bevy_async_task = "0.4"
 image = "0.25.5"
 server_responses = { path = "../server_responses" }
 

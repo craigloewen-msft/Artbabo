@@ -18,10 +18,10 @@ use backend_server_connections::*;
 
 use server_responses::*;
 
-use bevy_async_task::{AsyncTaskRunner, AsyncTaskStatus};
+use bevy_async_task::AsyncTaskRunner;
 
 use ::image::ImageReader;
-use std::{collections::HashMap, io::Cursor};
+use std::{collections::HashMap, io::Cursor, task::Poll};
 
 // === Assets ===
 #[derive(Resource, Debug, Default)]
@@ -112,7 +112,7 @@ pub fn draw_intro_ui(
             });
     } else {
         // Username input screen
-        egui::Area::new("input_area".into())
+        egui::Window::new("input_area".to_string())
             .anchor(Align2::CENTER_TOP, (0., 200.))
             .show(contexts.ctx_mut(), |ui| {
                 ui.vertical(|ui| {
@@ -278,83 +278,86 @@ pub fn draw_bidding_round_ui(
         .find(|player| player.id == current_player_data.player_id)
         .unwrap();
 
-    match task_executor.poll() {
-        AsyncTaskStatus::Idle => {
-            if images.current_bid_image.is_none() {
-                let url = room_state.current_art_bid.prompt_info.image_url.clone();
-                // Spawn an async task to download the image
-                task_executor.start(async move {
-                    info!("Started image loading for: {}", url.escape_debug());
+    // If there is no image start the process to get one
+    if images.current_bid_image.is_none() {
+        // Check if a task already exists before starting it
+        if task_executor.is_idle() {
+            let url = room_state.current_art_bid.prompt_info.image_url.clone();
+            // Spawn an async task to download the image
+            task_executor.start(async move {
+                info!("Started image loading for: {}", url.escape_debug());
 
-                    let client = reqwest::Client::new();
-                    let response = client.get(&url).send().await;
+                let client = reqwest::Client::new();
+                let response = client.get(&url).send().await;
 
-                    match response {
-                        Ok(resp) => {
-                            if resp.status().is_success() {
-                                let bytes = resp.bytes().await.unwrap();
-                                // Decode the image
-                                let reader = ImageReader::new(Cursor::new(bytes))
-                                    .with_guessed_format()
-                                    .unwrap(); // Correct use of Result
-                                let image = reader.decode().unwrap(); // Decode the image from the reader
-                                let rgba_image = image.to_rgba8();
-                                let (width, height) = rgba_image.dimensions();
-                                info!("Image dimensions: {}x{}", width, height);
+                match response {
+                    Ok(resp) => {
+                        if resp.status().is_success() {
+                            let bytes = resp.bytes().await.unwrap();
+                            // Decode the image
+                            let reader = ImageReader::new(Cursor::new(bytes))
+                                .with_guessed_format()
+                                .unwrap(); // Correct use of Result
+                            let image = reader.decode().unwrap(); // Decode the image from the reader
+                            let rgba_image = image.to_rgba8();
+                            let (width, height) = rgba_image.dimensions();
+                            info!("Image dimensions: {}x{}", width, height);
 
-                                // Create a Bevy texture
-                                let texture = Image::new_fill(
-                                    Extent3d {
-                                        width,
-                                        height,
-                                        depth_or_array_layers: 1,
-                                    },
-                                    TextureDimension::D2,
-                                    &rgba_image,
-                                    TextureFormat::Rgba8UnormSrgb,
-                                    RenderAssetUsages::RENDER_WORLD,
-                                );
+                            // Create a Bevy texture
+                            let texture = Image::new_fill(
+                                Extent3d {
+                                    width,
+                                    height,
+                                    depth_or_array_layers: 1,
+                                },
+                                TextureDimension::D2,
+                                &rgba_image,
+                                TextureFormat::Rgba8UnormSrgb,
+                                RenderAssetUsages::RENDER_WORLD,
+                            );
 
-                                info!("Finished image loading");
+                            info!("Finished image loading");
 
-                                Some(texture)
+                            Some(texture)
+                        } else {
+                            info!("HTTP error: {}", resp.status());
+                            if let Ok(text) = resp.text().await {
+                                info!("Response body: {}", text);
+                                panic!();
                             } else {
-                                info!("HTTP error: {}", resp.status());
-                                if let Ok(text) = resp.text().await {
-                                    info!("Response body: {}", text);
-                                    panic!();
-                                } else {
-                                    panic!();
-                                }
+                                panic!();
                             }
                         }
-                        Err(e) => {
-                            info!("Failed to fetch url at all: {:?}", e);
-                            panic!();
-                        }
                     }
-                });
-            }
+                    Err(e) => {
+                        info!("Failed to fetch url at all: {:?}", e);
+                        panic!();
+                    }
+                }
+            });
         }
-        AsyncTaskStatus::Pending => {}
-        AsyncTaskStatus::Finished(returned_image_option) => {
+    }
+
+    match task_executor.poll() {
+        Poll::Pending => {}
+        Poll::Ready(Ok(returned_image_option)) => {
             if let Some(returned_image) = returned_image_option {
                 let image_handle = asset_server.add(returned_image.clone());
                 images.current_bid_image = Some(image_handle.clone());
                 // Spawn entity with this image
+
+                let mut image_sprite = Sprite::from_image(image_handle.clone());
+                image_sprite.custom_size = Some(Vec2::new(85., 85.));
+
                 commands.spawn((
                     BidImage,
-                    SpriteBundle {
-                        transform: Transform::from_translation(Vec3::new(0., -15.0, 0.)),
-                        texture: image_handle.clone(),
-                        sprite: Sprite {
-                            custom_size: Some(Vec2::new(85., 85.)),
-                            ..default()
-                        },
-                        ..Default::default()
-                    },
+                    Transform::from_translation(Vec3::new(0., -15.0, 0.)),
+                    image_sprite,
                 ));
             }
+        },
+        Poll::Ready(Err(e)) => {
+            info!("Error in async task: {:?}", e);
         }
     }
 
@@ -615,6 +618,7 @@ pub fn add_end_score_screen_scenes(app: &mut App) {
 // === Main add logic ===
 pub fn add_scenes(app: &mut App) {
     app.init_state::<GameState>();
+    app.add_computed_state::<InBiddingRound>();
     app.insert_resource(Images::default());
     add_intro_scenes(app);
     add_waiting_room_scenes(app);

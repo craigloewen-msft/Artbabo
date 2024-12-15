@@ -18,6 +18,7 @@ fn main() {
                 fit_canvas_to_parent: true,
                 // don't hijack keyboard shortcuts like F5, F6, F12, Ctrl+R etc.
                 prevent_default_event_handling: false,
+                ime_enabled: true,
                 ..default()
             }),
             ..default()
@@ -44,9 +45,8 @@ fn main() {
 }
 
 fn setup(mut commands: Commands) {
-    let mut camera_bundle = Camera2dBundle::default();
-    camera_bundle.projection.scaling_mode = ScalingMode::FixedVertical(SCREEN_SCALING_SIZE);
-    commands.spawn(camera_bundle);
+    let camera = Camera2d::default();
+    commands.spawn(camera);
 }
 
 fn update_camera_scaling(
@@ -58,15 +58,23 @@ fn update_camera_scaling(
 
         for mut projection in query.iter_mut() {
             if aspect_ratio > 1.0 {
-                projection.scaling_mode = ScalingMode::FixedVertical(SCREEN_SCALING_SIZE);
+                projection.scaling_mode = ScalingMode::FixedVertical {
+                    viewport_height: SCREEN_SCALING_SIZE,
+                };
             } else {
-                projection.scaling_mode = ScalingMode::FixedHorizontal(SCREEN_SCALING_SIZE);
+                projection.scaling_mode = ScalingMode::FixedVertical {
+                    viewport_height: SCREEN_SCALING_SIZE,
+                };
             }
         }
     }
 }
 
-fn tick_timers(time: Res<Time>, mut round_timer: ResMut<RoundTimer>, mut notification_timers: Query<&mut GamePlayerNotification>) {
+fn tick_timers(
+    time: Res<Time>,
+    mut round_timer: ResMut<RoundTimer>,
+    mut notification_timers: Query<&mut GamePlayerNotification>,
+) {
     round_timer.0.tick(time.delta());
 
     for mut game_notification in notification_timers.iter_mut() {
@@ -74,7 +82,10 @@ fn tick_timers(time: Res<Time>, mut round_timer: ResMut<RoundTimer>, mut notific
     }
 }
 
-fn remove_finished_notifications(mut commands: Commands, query: Query<(Entity, &GamePlayerNotification)>) {
+fn remove_finished_notifications(
+    mut commands: Commands,
+    query: Query<(Entity, &GamePlayerNotification)>,
+) {
     for (entity, game_notification) in query.iter() {
         if game_notification.timer.finished() {
             commands.entity(entity).despawn();

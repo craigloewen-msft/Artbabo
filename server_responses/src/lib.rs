@@ -22,7 +22,7 @@ pub const BID_INCREASE_TIMER_START_WINDOW: f32 = 10.0;
 pub const MAX_PLAYERS: usize = 8;
 pub const MIN_PLAYERS: usize = 2;
 pub const IMAGE_GEN_TIMEOUT_SECS : u64 = 10;
-pub const PROMPT_GEN_TIMEOUT_SECS : u64 = 2;
+pub const PROMPT_GEN_TIMEOUT_SECS : u64 = 1;
 
 #[derive(Component, Resource)]
 pub struct RoundTimer(pub Timer);
@@ -72,8 +72,6 @@ pub struct ArtBidInfo {
     pub max_bid: u32,
     pub max_bid_player_id: u32,
     pub bid_increase_amount: u32,
-    #[serde(skip)]
-    pub art_value: u32,
 }
 
 impl Default for ArtBidInfo {
@@ -83,8 +81,6 @@ impl Default for ArtBidInfo {
             max_bid: Default::default(),
             max_bid_player_id: Default::default(),
             bid_increase_amount: Default::default(),
-            // Assign a random value to the art
-            art_value: thread_rng().gen_range(MIN_ART_VALUE..MAX_ART_VALUE),
         }
     }
 }
@@ -176,7 +172,7 @@ impl RoomState {
         }
 
         // Record art value and winning bid amount
-        round_end_info.art_value = self.current_art_bid.art_value;
+        round_end_info.art_value = self.current_art_bid.prompt_info.art_value.clone();
         round_end_info.winning_bid_amount = self.current_art_bid.max_bid;
 
         // Check if max bid is greater than 0 and handle existing bid info
@@ -189,7 +185,7 @@ impl RoomState {
             match winning_player {
                 Some(player) => {
                     player.money +=
-                        self.current_art_bid.art_value as i32 - self.current_art_bid.max_bid as i32;
+                        self.current_art_bid.prompt_info.art_value as i32 - self.current_art_bid.max_bid as i32;
                     // TODO: Add art to player's collection
                     round_end_info.bid_winner_name = player.username.clone();
                 }
@@ -445,6 +441,7 @@ pub struct PromptInfoData {
     pub prompt_answer: String,
     pub image_url: String,
     pub owner_id: u32,
+    pub art_value: u32,
 }
 
 #[derive(Debug, Event, Clone, Serialize, Deserialize, Default)]

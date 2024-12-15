@@ -10,6 +10,8 @@ use bevy_eventwork::{
 use rand::rngs::StdRng;
 
 use core::net::Ipv4Addr;
+use core::num;
+use std::collections::HashMap;
 use std::env;
 use std::fmt::Debug;
 use std::net::{IpAddr, SocketAddr};
@@ -24,7 +26,7 @@ use serde_json::json;
 use serde_json::Value;
 
 use rand::seq::SliceRandom;
-use rand::{thread_rng, SeedableRng};
+use rand::{thread_rng, Rng, SeedableRng};
 
 use bevy_eventwork_mod_websockets::*;
 
@@ -80,7 +82,7 @@ struct PromptGenerationTask {
 
 #[derive(Debug, Component)]
 struct HintGenerationTask {
-    task: Task<Result<Vec<String>, String>>,
+    task: Task<Result<HashMap<u32, Vec<String>>, String>>,
     status: TaskCompletionStatus,
 }
 
@@ -90,6 +92,18 @@ struct RoomStateServerInfo {
     prompt_task_list: Vec<CheckPromptTask>,
     prompt_generation_task_list: Vec<PromptGenerationTask>,
     hint_generation_task_list: Vec<HintGenerationTask>,
+}
+
+struct PromptInfoForHint {
+    prompt: String,
+    art_value: u32,
+    owner_username: String,
+    player_id: u32,
+}
+
+struct HintInfo {
+    hint: String,
+    player_id: u32,
 }
 
 #[derive(Component)]
@@ -439,15 +453,115 @@ async fn generate_prompt_texts(
 }
 
 async fn generate_hints(
-    num_hints: u32,
+    prompt_info_list: &Vec<PromptInfoForHint>,
     rng: &mut StdRng,
     completions_endpoint: String,
     completions_key: String,
-) -> Result<Vec<String>, String> {
-    let mut hints_list = Vec::<String>::new();
+    room_state: &RoomState,
+) -> Result<HashMap<u32, Vec<String>>, String> {
+    let mut hints_list = HashMap::<u32, Vec<String>>::new();
+    let mut generated_hints_list = Vec::<(String, u32)>::new();
+    let request_cooloff_time = PROMPT_GEN_TIMEOUT_SECS;
 
-    for _i in 0..num_hints {
-        hints_list.push("Hello".to_string());
+    // Get a list of strings representing the prompts
+    let mut prompt_strings = Vec::<String>::new();
+
+    for prompt_info in prompt_info_list.iter() {
+        prompt_strings.push(format!(
+            "{} has a prompt '{}' for a value of: {}",
+            prompt_info.owner_username, prompt_info.prompt, prompt_info.art_value
+        ));
+    }
+
+    info!("Prompt strings: {:?}", prompt_strings);
+
+    // Get hints for these based on the prompts and values
+    for i in 0..prompt_info_list.len() {
+        let prompt_string = &prompt_strings[i];
+        let prompt_info = &prompt_info_list[i];
+
+        let request_body = json!({
+        "messages": [
+            {
+                "role": "system",
+                "content": r###"You are an AI agent who provides a hint based on a username and prompt for a game.
+        Your job is to provide a somewhat vague hint for the content of the prompt and the username. Values of "###.to_string() + format!("{} are high and values of {} are low.", MIN_ART_VALUE, MAX_ART_VALUE).as_str()
+            },
+            {
+                "role": "user",
+                "content": "Billbo has a prompt 'dog with antlers' for a value of: 320".to_string()
+            },
+            {
+                "role": "assistant",
+                "content": "An image that has something to do with a pointy thing has a very low value".to_string()
+            },
+            {
+                "role": "user",
+                "content": "Monkey Man has a prompt 'lightning hitting a popsicle' for a value of: 3600".to_string()
+            },
+            {
+                "role": "assistant",
+                "content": "An electric prompt has a very high value".to_string()
+            },
+            {
+                "role": "user",
+                "content": prompt_string.clone()
+            },
+        ]
+         });
+
+        let response =
+            get_chat_completion(request_body, &completions_endpoint, &completions_key).await;
+
+        // Sleep for cooloff time
+        std::thread::sleep(Duration::from_secs(request_cooloff_time));
+
+        match response {
+            Ok(ai_response) => {
+                generated_hints_list.push((ai_response, prompt_info.player_id));
+            }
+            Err(e) => {
+                return Err(e);
+            }
+        }
+    }
+
+    let mut available_players: Vec<u32> = room_state
+        .players
+        .iter()
+        .map(|player| player.id)
+        .collect();
+
+    // Assign everyone the generated hints
+    for (hint, prompt_writer_id) in generated_hints_list.iter() {
+
+        info!("Available players: {:?}", available_players);
+        
+        let possible_players: Vec<u32> = available_players
+            .iter()
+            .filter(|&&player_id| player_id != *prompt_writer_id)
+            .cloned()
+            .collect();
+
+        info!("Possible players: {:?}", possible_players);
+
+        let random_player_id_option = possible_players.choose(rng);
+
+        if random_player_id_option.is_none() {
+            return Err("Failed to choose random player".to_string());
+        }
+
+        let random_player_id = *random_player_id_option.unwrap();
+
+        // Insert the formatted hint into the hashmap
+        let hints_list_entry = hints_list.entry(random_player_id).or_insert(Vec::new());
+
+        hints_list_entry.push(hint.clone());
+
+        // If the player has enough hints, remove them from the available players
+        if hints_list_entry.len() >= room_state.prompts_per_player as usize {
+            available_players.retain(|&player_id| player_id != random_player_id);
+        }
     }
 
     Ok(hints_list)
@@ -468,6 +582,8 @@ async fn get_chat_completion(
 
     let error_string;
 
+    info!("Getting chat completion for: {:?}", request_body);
+
     match response {
         Err(e) => {
             error_string = format!("Failed to send request: {:?}", e);
@@ -482,7 +598,7 @@ async fn get_chat_completion(
                 }
                 Ok(json) => match json.get("choices") {
                     None => {
-                        error_string = "Failed to get completions choices".to_string();
+                        error_string = format!("Failed to get completions choices: {:?}", json)
                     }
                     Some(choices) => match choices.get(0) {
                         None => {
@@ -513,7 +629,7 @@ async fn get_chat_completion(
         }
     }
 
-    error!("Failed to check prompt: {:?}", error_string);
+    error!("Failed to get chat completion: {:?}", error_string);
     return Err(error_string);
 }
 
@@ -1099,6 +1215,7 @@ fn handle_prompt_generation_tasks(
     for (entity, mut room_state, mut timer, mut room_state_server_info) in query.iter_mut() {
         if room_state_server_info.prompt_generation_task_list.len() > 0 {
             let mut generate_hints_check = false;
+            let mut prompt_list_for_hints = Vec::<PromptInfoForHint>::new();
             for compute_task_info in room_state_server_info
                 .prompt_generation_task_list
                 .iter_mut()
@@ -1135,6 +1252,7 @@ fn handle_prompt_generation_tasks(
                                     prompt_answer: String::default(),
                                     image_url: String::default(),
                                     owner_id: player.id,
+                                    art_value: thread_rng().gen_range(MIN_ART_VALUE..MAX_ART_VALUE),
                                 };
                                 let new_prompt_data = PromptInfoDataRequest {
                                     prompt: new_prompt,
@@ -1143,6 +1261,13 @@ fn handle_prompt_generation_tasks(
                                     state: PromptState::Proposed,
                                     error_message: String::default(),
                                 };
+
+                                prompt_list_for_hints.push(PromptInfoForHint {
+                                    prompt: new_prompt_data.prompt.prompt_text.clone(),
+                                    art_value: new_prompt_data.prompt.art_value.clone(),
+                                    owner_username: player.username.clone(),
+                                    player_id: player.id.clone(),
+                                });
 
                                 // Progress index counters
                                 player_prompt_count += 1;
@@ -1214,13 +1339,16 @@ fn handle_prompt_generation_tasks(
 
                 info!("Starting hint generation task in {} seconds", time_to_wait);
 
+                let room_state_clone = room_state.clone();
+
                 let task = thread_pool.spawn(async move {
                     std::thread::sleep(Duration::from_secs(time_to_wait as u64));
                     generate_hints(
-                        number_of_hints,
+                        &prompt_list_for_hints,
                         &mut rng,
                         azure_endpoint_url,
                         azure_endpoint_key,
+                        &room_state_clone,
                     )
                     .await
                 });
@@ -1265,23 +1393,18 @@ fn handle_hint_generation_tasks(
                             // TODO: Handle this error
                         }
                         Ok(generated_hint_list) => {
-                            let mut player_index = 0;
-                            let mut player_prompt_count = 0;
-
                             compute_task_info.status = TaskCompletionStatus::Completed;
 
                             info!("Generated hints: {:?}", generated_hint_list);
 
-                            for prompt_text in generated_hint_list.iter() {
-                                let player = &mut room_state.players[player_index];
+                            for (player_id, player_hints) in generated_hint_list.iter() {
+                                let player_option = &mut room_state
+                                    .players
+                                    .iter_mut()
+                                    .find(|player| player.id == *player_id);
 
-                                player.hints.push(prompt_text.clone());
-
-                                // Progress index counters
-                                player_prompt_count += 1;
-                                if player_prompt_count >= room_state.prompts_per_player {
-                                    player_index += 1;
-                                    player_prompt_count = 0;
+                                if let Some(player) = player_option {
+                                    player.hints = player_hints.clone();
                                 }
                             }
                         }

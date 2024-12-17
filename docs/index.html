@@ -1,0 +1,23 @@
+<html lang="en"></html>
+  <head>
+    <meta charset="UTF-8" />
+    <style>
+      body {
+        background: #2b2c2f;
+      }
+      canvas {
+        background: #2b2c2f;
+      }
+    </style>
+    <title>Wasm Example</title>
+  </head>
+  <script type="module">
+    import init from './mygame.js'
+
+    init().catch((error) => {
+      if (!error.message.startsWith("Using exceptions for control flow, don't mind me. This isn't actually an error!")) {
+        throw error;
+      }
+    });
+  </script>
+</html>

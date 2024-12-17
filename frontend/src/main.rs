@@ -1,5 +1,6 @@
 use bevy::{prelude::*, render::camera::ScalingMode, window::PrimaryWindow};
-use bevy_egui::EguiPlugin;
+use bevy_egui::{EguiContexts, EguiPlugin};
+use bevy_egui::{EguiSettings, EguiContext};
 
 mod scenes;
 use scenes::add_scenes;
@@ -52,10 +53,12 @@ fn setup(mut commands: Commands) {
 fn update_camera_scaling(
     mut windows: Query<&mut Window, With<PrimaryWindow>>,
     mut query: Query<&mut OrthographicProjection>,
+    mut contexts: EguiContexts,
 ) {
     for window in windows.iter_mut() {
         let aspect_ratio = window.width() / window.height();
 
+        // Camera scaling
         for mut projection in query.iter_mut() {
             if aspect_ratio > 1.0 {
                 projection.scaling_mode = ScalingMode::FixedVertical {

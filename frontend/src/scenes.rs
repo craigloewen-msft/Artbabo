@@ -75,7 +75,7 @@ pub fn draw_intro_ui(
 ) {
     if player_settings.username != "" {
         // Room option select screen
-        egui::Area::new("welcome_area".into())
+        egui::Window::new("welcome_area".to_string())
             .anchor(Align2::CENTER_TOP, (0., 200.))
             .show(contexts.ctx_mut(), |ui| {
                 ui.vertical(|ui| {
@@ -117,11 +117,29 @@ pub fn draw_intro_ui(
             .show(contexts.ctx_mut(), |ui| {
                 ui.vertical(|ui| {
                     ui.label("Enter username");
-                    ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
                         ui.text_edit_singleline(&mut *input_text);
                         if ui.button("Submit").clicked() {
                             warn!("Text input: {}", *input_text);
                             player_settings.username = input_text.clone();
+                        }
+                    });
+                });
+            });
+        // Username input screen
+        egui::Window::new("test_area".to_string())
+            .anchor(Align2::CENTER_BOTTOM, (0., 0.))
+            .show(contexts.ctx_mut(), |ui| {
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.columns(6, |columns| {
+                        for i in 0..6 {
+                            columns[i].with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                                ui.label("Enter username");
+                                ui.vertical(|ui| {
+                                    ui.label("This is some lable that is really long");
+                                    if ui.button("Submit").clicked() {}
+                                });
+                            });
                         }
                     });
                 });
@@ -146,7 +164,7 @@ pub fn draw_waiting_room_ui(
     let room_state = query.get_single_mut().unwrap();
 
     // For each player in the room, display their username and money
-    egui::Area::new("waiting_room_area".into())
+    egui::Window::new("waiting_room_area".to_string())
         .anchor(Align2::CENTER_TOP, (0., 200.))
         .show(contexts.ctx_mut(), |ui| {
             ui.vertical(|ui| {
@@ -189,7 +207,7 @@ pub fn draw_image_creation_ui(
     mut front_end_prompt_list: ResMut<FrontEndPromptList>,
     net: Res<Network<WebSocketProvider>>,
 ) {
-    egui::Area::new("image_creation_area".into())
+    egui::Window::new("image_creation_area".to_string())
         .anchor(Align2::CENTER_TOP, (0., 0.))
         .show(contexts.ctx_mut(), |ui| {
             ui.vertical(|ui| {
@@ -347,7 +365,7 @@ pub fn draw_bidding_round_ui(
                 // Spawn entity with this image
 
                 let mut image_sprite = Sprite::from_image(image_handle.clone());
-                image_sprite.custom_size = Some(Vec2::new(85., 85.));
+                image_sprite.custom_size = Some(Vec2::new(75., 75.));
 
                 commands.spawn((
                     BidImage,
@@ -355,166 +373,188 @@ pub fn draw_bidding_round_ui(
                     image_sprite,
                 ));
             }
-        },
+        }
         Poll::Ready(Err(e)) => {
             info!("Error in async task: {:?}", e);
         }
     }
 
-    egui::Area::new("some_test".into())
-        .anchor(Align2::LEFT_TOP, (0., 0.))
+    egui::Window::new("player_hints".to_string())
+        .anchor(Align2::CENTER_BOTTOM, (0., 10.))
         .show(contexts.ctx_mut(), |ui| {
-            ui.label(format!("Hints: {:?}", current_player.hints));
+            ui.vertical(|ui| {
+                ui.heading("Your Hints");
+                ui.add_space(8.0);
+
+                for hint in current_player.hints.iter() {
+                    ui.label(hint);
+                }
+
+                if current_player.hints.is_empty() {
+                    ui.label("No hints available yet");
+                }
+            });
         });
 
-    egui::Area::new("round_area".into())
+    egui::Window::new("round_area".to_string())
         .anchor(Align2::CENTER_TOP, (0., 0.))
+        .default_width(300.0)
         .show(contexts.ctx_mut(), |ui| {
-            // Show initial top bar of status
-            ui.add_space(2.0);
-            ui.horizontal(|ui| {
-                // Show timer information at top
-                ui.vertical(|ui| {
-                    ui.label("Time left: ");
-                    ui.label(format!("{:.2}", round_timer.0.remaining_secs()));
+            egui::ScrollArea::horizontal().show(ui, |ui| {
+                // Show initial top bar of status
+                ui.add_space(2.0);
+                ui.horizontal(|ui| {
+                    // Show timer information at top
+                    ui.vertical(|ui| {
+                        ui.label("Time left: ");
+                        ui.label(format!("{:.2}", round_timer.0.remaining_secs()));
+                    });
+
+                    ui.vertical(|ui| {
+                        ui.label("Current bid:");
+                        ui.label(format!("{}", room_state.current_art_bid.max_bid));
+                    });
+
+                    let current_bid_owner = room_state
+                        .players
+                        .iter()
+                        .find(|player| player.id == room_state.current_art_bid.max_bid_player_id);
+
+                    ui.vertical(|ui| {
+                        ui.label("Max bid owner:");
+                        if let Some(owner) = current_bid_owner {
+                            if room_state.current_art_bid.max_bid > 0 {
+                                ui.label(format!("{}", owner.username));
+                            } else {
+                                ui.label("No owner");
+                            }
+                        }
+                    });
+
+                    ui.vertical(|ui| {
+                        ui.add_space(1.0);
+                    });
                 });
 
-                ui.vertical(|ui| {
-                    ui.label("Current bid:");
-                    ui.label(format!("{}", room_state.current_art_bid.max_bid));
-                });
-
-                let current_bid_owner = room_state
-                    .players
-                    .iter()
-                    .find(|player| player.id == room_state.current_art_bid.max_bid_player_id);
-
-                ui.vertical(|ui| {
-                    ui.label("Max bid owner:");
-                    if let Some(owner) = current_bid_owner {
-                        if room_state.current_art_bid.max_bid > 0 {
-                            ui.label(format!("{}", owner.username));
+                ui.add_space(5.0);
+                if *game_state.get() == GameState::BiddingRound {
+                    // Prepare hash map for player notifications
+                    let mut player_notifications_map =
+                        HashMap::<u32, Vec<&GamePlayerNotification>>::new();
+                    for notification in notifications_query.iter() {
+                        if let Some(notification_list) =
+                            player_notifications_map.get_mut(&notification.target_player_id)
+                        {
+                            notification_list.push(notification);
                         } else {
-                            ui.label("No owner");
+                            player_notifications_map
+                                .insert(notification.target_player_id, vec![notification]);
                         }
                     }
-                });
-            });
 
-            ui.add_space(5.0);
-            if *game_state.get() == GameState::BiddingRound {
-                // Prepare hash map for player notifications
-                let mut player_notifications_map =
-                    HashMap::<u32, Vec<&GamePlayerNotification>>::new();
-                for notification in notifications_query.iter() {
-                    if let Some(notification_list) =
-                        player_notifications_map.get_mut(&notification.target_player_id)
-                    {
-                        notification_list.push(notification);
-                    } else {
-                        player_notifications_map
-                            .insert(notification.target_player_id, vec![notification]);
+                    // Sort notifications by time remaining
+                    for notification_list in player_notifications_map.values_mut() {
+                        notification_list.sort_by(|a, b| {
+                            b.timer
+                                .remaining_secs()
+                                .partial_cmp(&a.timer.remaining_secs())
+                                .unwrap()
+                        });
                     }
-                }
 
-                // Sort notifications by time remaining
-                for notification_list in player_notifications_map.values_mut() {
-                    notification_list.sort_by(|a, b| {
-                        b.timer
-                            .remaining_secs()
-                            .partial_cmp(&a.timer.remaining_secs())
-                            .unwrap()
-                    });
-                }
-
-                // Show players if in bidding round
-                ui.horizontal(|ui| {
-                    for player in room_state.players.iter() {
-                        ui.vertical(|ui| {
-                            if player.id == current_player_data.player_id {
-                                ui.label(
-                                    RichText::new(format!("{} (You)", player.username)).strong(),
-                                );
-                            } else {
-                                ui.label(RichText::new(format!("{}", player.username)).strong());
-                            }
-
-                            ui.label(format!("Force bids: {}", player.force_bids_left));
-
-                            if player.id == current_player_data.player_id {
-                                let button = ui.add_enabled(
-                                    *game_state.get() == GameState::BiddingRound,
-                                    egui::Button::new("Bid")
-                                        .fill(egui::Color32::from_rgb(45, 65, 180)),
-                                );
-
-                                if button.clicked() {
-                                    send_bid_action(
-                                        current_player_data.player_id,
-                                        room_state.room_id,
-                                        &net,
+                    // Show players if in bidding round
+                    ui.columns(room_state.players.len(),|columns| {
+                        for (i, player) in room_state.players.iter().enumerate() {
+                            columns[i].vertical(|ui| {
+                                if player.id == current_player_data.player_id {
+                                    ui.label(
+                                        RichText::new(format!("{} (You)", player.username))
+                                            .strong(),
+                                    );
+                                } else {
+                                    ui.label(
+                                        RichText::new(format!("{}", player.username)).strong(),
                                     );
                                 }
-                            } else {
-                                let force_bid_button = ui.add_enabled(
-                                    current_player.force_bids_left > 0
-                                        && *game_state.get() == GameState::BiddingRound,
-                                    egui::Button::new("Force bid"),
-                                );
 
-                                if force_bid_button.clicked() {
-                                    send_force_bid_action(
-                                        current_player_data.player_id,
-                                        player.id,
-                                        room_state.room_id,
-                                        &net,
+                                ui.label(format!("Force bids: {}", player.force_bids_left));
+
+                                if player.id == current_player_data.player_id {
+                                    let button = ui.add_enabled(
+                                        *game_state.get() == GameState::BiddingRound,
+                                        egui::Button::new("Bid")
+                                            .fill(egui::Color32::from_rgb(45, 65, 180)),
                                     );
-                                }
-                            }
-                            // Show notifications
-                            ui.label("------");
-                            if let Some(notification_list) =
-                                player_notifications_map.get(&player.id)
-                            {
-                                for notification in notification_list {
-                                    if notification.target_player_id == player.id {
-                                        let fade_time = 0.2;
-                                        let color_value = timer_value_to_alpha_function(
-                                            notification.timer.remaining_secs(),
-                                            notification.timer.duration().as_secs_f32() - fade_time,
-                                            fade_time,
-                                            notification.timer.duration().as_secs_f32(),
+
+                                    if button.clicked() {
+                                        send_bid_action(
+                                            current_player_data.player_id,
+                                            room_state.room_id,
+                                            &net,
                                         );
-                                        ui.label(
-                                            egui::RichText::new(notification.message.clone())
-                                                .color(egui::Color32::from_rgba_premultiplied(
-                                                    color_value,
-                                                    color_value,
-                                                    color_value,
-                                                    color_value,
-                                                    // timer_value_to_alpha_function(
-                                                    //     notification.timer.remaining_secs(),
-                                                    //     notification.timer.duration().as_secs_f32()
-                                                    //         - 1.0,
-                                                    //     1.0,
-                                                    //     notification.timer.duration().as_secs_f32(),
-                                                    // ),
-                                                )),
+                                    }
+                                } else {
+                                    let force_bid_button = ui.add_enabled(
+                                        current_player.force_bids_left > 0
+                                            && *game_state.get() == GameState::BiddingRound,
+                                        egui::Button::new("Force bid"),
+                                    );
+
+                                    if force_bid_button.clicked() {
+                                        send_force_bid_action(
+                                            current_player_data.player_id,
+                                            player.id,
+                                            room_state.room_id,
+                                            &net,
                                         );
                                     }
                                 }
-                            }
-                        });
-                    }
-                });
-            } else if *game_state.get() == GameState::BiddingRoundEnd {
-                // Show end of bidding round information
-                ui.label("Bidding round end");
-                ui.label(format!("Artist: {}", round_end_info.artist_name));
-                ui.label(format!("Bid winner: {}", round_end_info.bid_winner_name));
-                ui.label(format!("Amount bid: {}", round_end_info.winning_bid_amount));
-                ui.label(format!("Art value: {}", round_end_info.art_value));
-            }
+                                // Show notifications
+                                ui.label("------");
+                                if let Some(notification_list) =
+                                    player_notifications_map.get(&player.id)
+                                {
+                                    for notification in notification_list {
+                                        if notification.target_player_id == player.id {
+                                            let fade_time = 0.2;
+                                            let color_value = timer_value_to_alpha_function(
+                                                notification.timer.remaining_secs(),
+                                                notification.timer.duration().as_secs_f32()
+                                                    - fade_time,
+                                                fade_time,
+                                                notification.timer.duration().as_secs_f32(),
+                                            );
+                                            ui.label(
+                                                egui::RichText::new(notification.message.clone())
+                                                    .color(egui::Color32::from_rgba_premultiplied(
+                                                        color_value,
+                                                        color_value,
+                                                        color_value,
+                                                        color_value,
+                                                        // timer_value_to_alpha_function(
+                                                        //     notification.timer.remaining_secs(),
+                                                        //     notification.timer.duration().as_secs_f32()
+                                                        //         - 1.0,
+                                                        //     1.0,
+                                                        //     notification.timer.duration().as_secs_f32(),
+                                                        // ),
+                                                    )),
+                                            );
+                                        }
+                                    }
+                                }
+                            });
+                        }
+                    });
+                } else if *game_state.get() == GameState::BiddingRoundEnd {
+                    // Show end of bidding round information
+                    ui.label("Bidding round end");
+                    ui.label(format!("Artist: {}", round_end_info.artist_name));
+                    ui.label(format!("Bid winner: {}", round_end_info.bid_winner_name));
+                    ui.label(format!("Amount bid: {}", round_end_info.winning_bid_amount));
+                    ui.label(format!("Art value: {}", round_end_info.art_value));
+                }
+            });
         });
 }
 
@@ -574,7 +614,7 @@ pub fn draw_end_score_screen_ui(
     game_end_info: Res<GameEndInfo>,
     round_timer: Res<RoundTimer>,
 ) {
-    egui::Area::new("end_score_screen_area".into())
+    egui::Window::new("end_score_screen_area".to_string())
         .anchor(Align2::CENTER_TOP, (0., 0.))
         .show(contexts.ctx_mut(), |ui| {
             ui.vertical(|ui| {

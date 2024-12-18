@@ -255,7 +255,7 @@ fn setup_networking(
     let connect_string = if DEBUG_MODE {
         "ws://127.0.0.1:8081"
     } else {
-        "wss://artbabo-bub2g5b5e3awg3gp.eastus-01.azurewebsites.net/"
+        "ws://52.180.68.180:8081"
     };
 
     net.connect(

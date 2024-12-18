@@ -126,24 +126,6 @@ pub fn draw_intro_ui(
                     });
                 });
             });
-        // Username input screen
-        egui::Window::new("test_area".to_string())
-            .anchor(Align2::CENTER_BOTTOM, (0., 0.))
-            .show(contexts.ctx_mut(), |ui| {
-                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                    ui.columns(6, |columns| {
-                        for i in 0..6 {
-                            columns[i].with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                                ui.label("Enter username");
-                                ui.vertical(|ui| {
-                                    ui.label("This is some lable that is really long");
-                                    if ui.button("Submit").clicked() {}
-                                });
-                            });
-                        }
-                    });
-                });
-            });
     }
 }
 

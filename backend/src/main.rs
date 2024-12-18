@@ -873,14 +873,22 @@ fn increment_server_time(server_time: &mut DateTime<Utc>, time_to_increment: u64
 // === Core functionality ===
 fn setup_connections(mut azure_endpoint_info: ResMut<AzureEndpointInfo>) {
     dotenv::dotenv().ok();
-    let azure_ai_image_key =
-        env::var("AZURE_AI_IMAGE_KEY").expect("AZURE_AI_IMAGE_KEY must be set");
-    let azure_ai_image_endpoint =
-        env::var("AZURE_AI_IMAGE_ENDPOINT").expect("AZURE_AI_IMAGE_ENDPOINT must be set");
-    let azure_ai_completions_key =
-        env::var("AZURE_AI_COMPLETIONS_KEY").expect("AZURE_AI_COMPLETIONS_KEY must be set");
-    let azure_ai_completions_endpoint = env::var("AZURE_AI_COMPLETIONS_ENDPOINT")
-        .expect("AZURE_AI_COMPLETIONS_ENDPOINT must be set");
+    let azure_ai_image_key = env::var("AZURE_AI_IMAGE_KEY").unwrap_or_else(|_| {
+        error!("Warning: AZURE_AI_IMAGE_KEY is not set");
+        String::new()
+    });
+    let azure_ai_image_endpoint = env::var("AZURE_AI_IMAGE_ENDPOINT").unwrap_or_else(|_| {
+        error!("Warning: AZURE_AI_IMAGE_ENDPOINT is not set");
+        String::new()
+    });
+    let azure_ai_completions_key = env::var("AZURE_AI_COMPLETIONS_KEY").unwrap_or_else(|_| {
+        error!("Warning: AZURE_AI_COMPLETIONS_KEY is not set");
+        String::new()
+    });
+    let azure_ai_completions_endpoint = env::var("AZURE_AI_COMPLETIONS_ENDPOINT").unwrap_or_else(|_| {
+        error!("Warning: AZURE_AI_COMPLETIONS_ENDPOINT is not set");
+        String::new()
+    });
 
     azure_endpoint_info.image_gen_endpoint = azure_ai_image_endpoint;
     azure_endpoint_info.image_gen_key = azure_ai_image_key;
@@ -901,7 +909,7 @@ fn setup_networking(
     } else {
         SocketAddr::new(
             "0.0.0.0".parse().expect("Could not parse ip address"),
-            3000,
+            8081,
         )
     };
 

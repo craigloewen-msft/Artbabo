@@ -4,5 +4,5 @@
 	"name": "Rust",
 	// Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
 	"dockerFile": "Dockerfile",
-	"postCreateCommand": "cargo install wasm-server-runner && cargo install cargo-watch && rustup target install wasm32-unknown-unknown"
+	"postCreateCommand": "cargo install wasm-server-runner && cargo install wasm-bindgen-cli && cargo install cargo-watch && rustup target install wasm32-unknown-unknown"
 }

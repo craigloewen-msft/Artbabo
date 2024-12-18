@@ -13,10 +13,8 @@ Based on Jackbox's bidiots (Thanks Jackbox for the great games!) it's a rust bas
 
 ```
 cargo build --release --target wasm32-unknown-unknown
-wasm-bindgen --no-typescript --target web \
-    --out-dir ./out/ \
-    --out-name "mygame" \
-    ./target/wasm32-unknown-unknown/release/mygame.wasm
+asm-bindgen --no-typescript --target web --out-dir ../docs/ --out-name "mygame" ../target/wasm32-unknown-unkno
+wn/release/artbabo_frontend.wasm
 ```
 
 Move the files to /docs

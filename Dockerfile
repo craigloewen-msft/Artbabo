@@ -21,4 +21,4 @@ RUN apt update && \
     apt install -y libasound2-dev libudev-dev libx11-dev libxcursor-dev libxcb1-dev libxi-dev libxkbcommon-dev libxkbcommon-x11-dev portaudio19-dev build-essential libpulse-dev libdbus-1-dev 
 
 COPY --from=builder /usr/local/cargo/bin/artbabo /usr/local/bin/artbabo
-CMD ["artbabo"]
+EXPOSE 8081

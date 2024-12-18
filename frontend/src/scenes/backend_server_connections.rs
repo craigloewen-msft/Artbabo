@@ -251,8 +251,15 @@ fn setup_networking(
     task_pool: Res<EventworkRuntime<TaskPool>>,
 ) {
     info!("Setting up networking and wanting to connect");
+
+    let connect_string = if DEBUG_MODE {
+        "ws://127.0.0.1:8081"
+    } else {
+        "https://artbabo-bub2g5b5e3awg3gp.eastus-01.azurewebsites.net/"
+    }
+
     net.connect(
-        url::Url::parse("ws://127.0.0.1:8081").unwrap(),
+        url::Url::parse(connect_string).unwrap(),
         &task_pool.0,
         &settings,
     );

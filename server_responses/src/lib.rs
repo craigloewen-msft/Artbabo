@@ -5,6 +5,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 pub const DEBUG_MODE: bool = false;
+pub const GAME_VERSION: u8 = 1;
 
 pub const BIDDING_ROUND_TIME: f32 = 30.0;
 pub const BIDDING_ROUND_END_TIME: f32 = 9.0;
@@ -145,6 +146,7 @@ pub struct RoomState {
     pub remaining_prompts: Vec<PromptInfoData>,
     pub used_prompts: Vec<PromptInfoData>,
     pub room_code: String,
+    pub version_number: u8,
 }
 
 impl NetworkMessage for RoomState {

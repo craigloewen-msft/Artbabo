@@ -5,7 +5,7 @@ Based on Jackbox's bidiots (Thanks Jackbox for the great games!) it's a rust bas
 ## Debugging
 
 - Run `cargo watch -cx "run -p artbabo"` to debug backend
-- Run `cargo watch -cx "run --target wasm32-unknown-unknown -p artbabo_frontend"` to debug frontend
+- Run `cd frontend && cargo watch -cx "run --target wasm32-unknown-unknown"` to debug frontend
 
 ## Releasing
 

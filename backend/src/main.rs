@@ -893,17 +893,21 @@ fn setup_networking(
     settings: Res<NetworkSettings>,
     task_pool: Res<EventworkRuntime<TaskPool>>,
 ) {
-    let ip_address = "127.0.0.1".parse().expect("Could not parse ip address");
+    let socket_address = if DEBUG_MODE {
+        SocketAddr::new(
+            "127.0.0.1".parse().expect("Could not parse ip address"),
+            8081,
+        )
+    } else {
+        SocketAddr::new(
+            "0.0.0.0".parse().expect("Could not parse ip address"),
+            3000,
+        )
+    };
 
-    info!("Address of the server: {}", ip_address);
+    info!("Address of the server: {}", socket_address.to_string());
 
-    let _socket_address = SocketAddr::new(ip_address, 9999);
-
-    match net.listen(
-        SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8081),
-        &task_pool.0,
-        &settings,
-    ) {
+    match net.listen(socket_address, &task_pool.0, &settings) {
         Ok(_) => (),
         Err(err) => {
             error!("Could not start listening: {}", err);
@@ -1537,6 +1541,7 @@ fn room_join_request(
                 remaining_prompts: vec![],
                 used_prompts: vec![],
                 room_code: new_message.room_code.clone(),
+                version_number: GAME_VERSION,
             };
 
             let mut inserted_timer = Timer::from_seconds(5.0, TimerMode::Once);

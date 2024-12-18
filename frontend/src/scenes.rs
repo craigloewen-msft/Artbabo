@@ -655,11 +655,30 @@ pub fn add_end_score_screen_scenes(app: &mut App) {
     );
 }
 
+// Default scenes
+
+fn draw_version_number (
+    mut contexts: EguiContexts,
+    query: Query<&RoomState>,
+) {
+    match query.get_single() {
+        Err(_) => {},
+        Ok(room_state) => {
+            egui::Area::new("version_number".into())
+                .anchor(Align2::RIGHT_BOTTOM, (-10., -10.))
+                .show(contexts.ctx_mut(), |ui| {
+                    ui.label(format!("Version: {}", room_state.version_number));
+                });
+        }
+    }
+}
+
 // === Main add logic ===
 pub fn add_scenes(app: &mut App) {
     app.init_state::<GameState>();
     app.add_computed_state::<InBiddingRound>();
     app.insert_resource(Images::default());
+    app.add_systems(Update, draw_version_number);
     add_intro_scenes(app);
     add_waiting_room_scenes(app);
     add_image_creation_scenes(app);

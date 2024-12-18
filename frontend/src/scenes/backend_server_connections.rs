@@ -255,8 +255,8 @@ fn setup_networking(
     let connect_string = if DEBUG_MODE {
         "ws://127.0.0.1:8081"
     } else {
-        "https://artbabo-bub2g5b5e3awg3gp.eastus-01.azurewebsites.net/"
-    }
+        "wss://artbabo-bub2g5b5e3awg3gp.eastus-01.azurewebsites.net/"
+    };
 
     net.connect(
         url::Url::parse(connect_string).unwrap(),

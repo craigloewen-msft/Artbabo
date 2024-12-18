@@ -1,14 +1,13 @@
 use bevy::prelude::*;
 use bevy_eventwork::ConnectionId;
 use bevy_eventwork::NetworkMessage;
-use rand::Rng;
 use serde::Deserialize;
 use serde::Serialize;
 
-use rand::thread_rng;
+pub const DEBUG_MODE: bool = false;
 
-pub const BIDDING_ROUND_TIME: f32 = 10.0;
-pub const BIDDING_ROUND_END_TIME: f32 = 5.0;
+pub const BIDDING_ROUND_TIME: f32 = 30.0;
+pub const BIDDING_ROUND_END_TIME: f32 = 9.0;
 pub const END_SCORE_SCREEN_TIME: f32 = 30.0;
 
 pub const NOTIFICATION_LIFETIME: f32 = 3.0;

@@ -35,8 +35,6 @@ use chrono::{DateTime, Utc};
 extern crate server_responses;
 use server_responses::*;
 
-const DEBUG_MODE: bool = true;
-
 #[derive(Component)]
 struct PublicRoom;
 

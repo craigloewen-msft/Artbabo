@@ -50,6 +50,7 @@ struct AzureEndpointInfo {
     image_gen_key: String,
     completions_endpoint: String,
     completions_key: String,
+    port: u16,
 }
 
 #[derive(Resource, Default)]
@@ -124,8 +125,8 @@ fn main() {
         .insert_resource(NetworkSettings::default())
         .insert_resource(AzureEndpointInfo::default())
         .insert_resource(GlobalServerValues::default())
-        .add_systems(Startup, setup_networking)
         .add_systems(Startup, setup_connections)
+        .add_systems(Startup, setup_networking.after(setup_connections))
         .add_systems(Update, handle_connection_events)
         .add_systems(Update, tick_timers)
         .add_systems(Update, handle_timer_events)
@@ -885,32 +886,48 @@ fn setup_connections(mut azure_endpoint_info: ResMut<AzureEndpointInfo>) {
         error!("Warning: AZURE_AI_COMPLETIONS_KEY is not set");
         String::new()
     });
-    let azure_ai_completions_endpoint = env::var("AZURE_AI_COMPLETIONS_ENDPOINT").unwrap_or_else(|_| {
-        error!("Warning: AZURE_AI_COMPLETIONS_ENDPOINT is not set");
-        String::new()
-    });
+    let azure_ai_completions_endpoint =
+        env::var("AZURE_AI_COMPLETIONS_ENDPOINT").unwrap_or_else(|_| {
+            error!("Warning: AZURE_AI_COMPLETIONS_ENDPOINT is not set");
+            String::new()
+        });
+    let port: u16 = env::var("PORT")
+        .unwrap_or_else(|_| {
+            error!("Warning: PORT is not set");
+            String::new()
+        })
+        .parse()
+        .unwrap_or_else(|err| {
+            error!("Warning: Failed to parse PORT: {}", err);
+            0 // Default to 0 or any other appropriate port number
+        });
 
     azure_endpoint_info.image_gen_endpoint = azure_ai_image_endpoint;
     azure_endpoint_info.image_gen_key = azure_ai_image_key;
     azure_endpoint_info.completions_endpoint = azure_ai_completions_endpoint;
     azure_endpoint_info.completions_key = azure_ai_completions_key;
+    azure_endpoint_info.port = port;
 }
 
 fn setup_networking(
     mut net: ResMut<Network<WebSocketProvider>>,
     settings: Res<NetworkSettings>,
     task_pool: Res<EventworkRuntime<TaskPool>>,
+    azure_endpoint_info: Res<AzureEndpointInfo>
 ) {
+    let port = if azure_endpoint_info.port == 0 {
+        8081
+    } else {
+        azure_endpoint_info.port
+    };
+
     let socket_address = if DEBUG_MODE {
         SocketAddr::new(
             "127.0.0.1".parse().expect("Could not parse ip address"),
-            8081,
+            port,
         )
     } else {
-        SocketAddr::new(
-            "0.0.0.0".parse().expect("Could not parse ip address"),
-            8081,
-        )
+        SocketAddr::new("0.0.0.0".parse().expect("Could not parse ip address"), port)
     };
 
     info!("Address of the server: {}", socket_address.to_string());

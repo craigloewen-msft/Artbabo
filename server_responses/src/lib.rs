@@ -5,9 +5,10 @@ use serde::Deserialize;
 use serde::Serialize;
 
 pub const DEBUG_MODE: bool = false;
+pub const LOCAL_CONNECTION_MODE: bool = true;
 pub const GAME_VERSION: u8 = 2;
 
-pub const BIDDING_ROUND_TIME: f32 = 30.0;
+pub const BIDDING_ROUND_TIME: f32 = 50.0;
 pub const BIDDING_ROUND_END_TIME: f32 = 9.0;
 pub const END_SCORE_SCREEN_TIME: f32 = 30.0;
 
@@ -16,8 +17,8 @@ pub const NOTIFICATION_LIFETIME: f32 = 3.0;
 pub const MIN_ART_VALUE: u32 = 100;
 pub const MAX_ART_VALUE: u32 = 3500;
 
-pub const BID_INCREASE_TIMER_VALUE: f32 = 1.0;
-pub const BID_INCREASE_TIMER_START_WINDOW: f32 = 10.0;
+pub const BID_INCREASE_TIMER_VALUE: f32 = 5.0;
+pub const BID_INCREASE_TIMER_START_WINDOW: f32 = 30.0;
 
 pub const MAX_PLAYERS: usize = 8;
 pub const MIN_PLAYERS: usize = 2;

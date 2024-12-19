@@ -251,7 +251,7 @@ fn setup_networking(
     task_pool: Res<EventworkRuntime<TaskPool>>,
 ) {
 
-    let connect_string = if DEBUG_MODE {
+    let connect_string = if LOCAL_CONNECTION_MODE {
         "ws://127.0.0.1:8081"
     } else {
         "ws://52.180.68.180:8081"

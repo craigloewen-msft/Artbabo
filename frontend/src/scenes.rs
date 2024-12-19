@@ -192,7 +192,7 @@ pub fn draw_prompt_generation_scene(
         .anchor(Align2::CENTER_TOP, (0., 10.))
         .show(contexts.ctx_mut(), |ui| {
             ui.vertical(|ui| {
-                ui.label("Please wait for other players to finish generating prompts");
+                ui.label("Please wait for the prompts to be generated");
             });
         });
 }

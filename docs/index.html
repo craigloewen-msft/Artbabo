@@ -1,4 +1,4 @@
-<html lang="en"></html>
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <style>
@@ -12,12 +12,14 @@
     <title>Artbabo</title>
   </head>
   <body>
-    <h1>Game is loading</h1>
+    <h1 id="loading-message">Game is loading</h1>
   </body>
   <script type="module">
     import init from './mygame.js'
 
-    init().catch((error) => {
+    init().then(() => {
+      document.getElementById('loading-message').remove();
+    }).catch((error) => {
       if (!error.message.startsWith("Using exceptions for control flow, don't mind me. This isn't actually an error!")) {
         throw error;
       }

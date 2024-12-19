@@ -9,21 +9,7 @@ WORKDIR /usr/src/
 RUN apt update && \
     apt install -y libasound2-dev libudev-dev libx11-dev libxcursor-dev libxcb1-dev libxi-dev libxkbcommon-dev libxkbcommon-x11-dev portaudio19-dev build-essential libpulse-dev libdbus-1-dev 
 
-RUN USER=root cargo new myapp
-WORKDIR /usr/src/myapp
-RUN USER=root cargo new backend
-RUN USER=root cargo new frontend
-RUN USER=root cargo new server_responses
-COPY Cargo.toml Cargo.lock /usr/src/myapp/
-COPY backend/Cargo.toml backend/Cargo.lock /usr/src/myapp/backend
-COPY frontend/Cargo.toml /usr/src/myapp/frontend
-COPY server_responses/Cargo.toml /usr/src/myapp/server_responses
-
-RUN cargo build --release -p artbabo
-
-# Copy the source and build the application.
-COPY server_responses/src /usr/src/myapp/server_responses/src
-COPY backend/src /usr/src/myapp/frontend/src
+COPY . .
 
 RUN cargo build --release -p artbabo
 RUN cargo install --path ./backend

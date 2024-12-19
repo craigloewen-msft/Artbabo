@@ -1,29 +1,40 @@
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <style>
-      body {
-        background: #2b2c2f;
-      }
-      canvas {
-        background: #2b2c2f;
-      }
-    </style>
-    <title>Artbabo</title>
-  </head>
-  <body>
-    <h1 id="loading-message">Game is loading</h1>
-  </body>
-  <script type="module">
-    import init from './mygame.js'
 
-    init().then(() => {
-      console.log("Game initialized");
-      document.getElementById('loading-message').style.display = 'none';
-    }).catch((error) => {
-      if (!error.message.startsWith("Using exceptions for control flow, don't mind me. This isn't actually an error!")) {
-        throw error;
-      }
-    });
-  </script>
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    body {
+      background: #2b2c2f;
+    }
+
+    canvas {
+      background: #2b2c2f;
+    }
+  </style>
+  <title>Artbabo</title>
+</head>
+
+<body>
+  <h1 id="loading-message">Game is loading</h1>
+</body>
+<script type="module">
+  import init from './mygame.js'
+
+  init().then(() => {
+    console.log("Game initialized");
+  }).catch((error) => {
+    if (!error.message.startsWith("Using exceptions for control flow, don't mind me. This isn't actually an error!")) {
+      throw error;
+    }
+  });
+
+  // Remove the loading message after 10 seconds
+  setTimeout(() => {
+    const loadingMessage = document.getElementById('loading-message');
+    if (loadingMessage) {
+      loadingMessage.style.display = 'none'; // Hides the loading message
+    }
+  }, 5000); 
+</script>
+
 </html>

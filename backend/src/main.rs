@@ -2,6 +2,7 @@ use bevy::ecs::query::QueryFilter;
 use bevy::log::Level;
 use bevy::prelude::*;
 use bevy::tasks::TaskPoolBuilder;
+use bevy::winit::WinitSettings;
 use bevy::{log::LogPlugin, tasks::TaskPool};
 use bevy_eventwork::{
     AppNetworkMessage, ConnectionId, EventworkRuntime, Network, NetworkData, NetworkEvent,
@@ -9,12 +10,10 @@ use bevy_eventwork::{
 };
 use rand::rngs::StdRng;
 
-use core::net::Ipv4Addr;
-use core::num;
 use std::collections::HashMap;
 use std::env;
 use std::fmt::Debug;
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::ops::DerefMut;
 use std::time::Duration;
 
@@ -100,11 +99,6 @@ struct PromptInfoForHint {
     player_id: u32,
 }
 
-struct HintInfo {
-    hint: String,
-    player_id: u32,
-}
-
 #[derive(Component)]
 struct GameCleanupTimer(Timer);
 
@@ -125,6 +119,12 @@ fn main() {
         .insert_resource(NetworkSettings::default())
         .insert_resource(AzureEndpointInfo::default())
         .insert_resource(GlobalServerValues::default())
+        .insert_resource(WinitSettings {
+            focused_mode: bevy::winit::UpdateMode::reactive_low_power(Duration::from_millis(5000)),
+            unfocused_mode: bevy::winit::UpdateMode::reactive_low_power(Duration::from_millis(
+                5000,
+            )),
+        })
         .add_systems(Startup, setup_connections)
         .add_systems(Startup, setup_networking.after(setup_connections))
         .add_systems(Update, handle_connection_events)
@@ -913,7 +913,7 @@ fn setup_networking(
     mut net: ResMut<Network<WebSocketProvider>>,
     settings: Res<NetworkSettings>,
     task_pool: Res<EventworkRuntime<TaskPool>>,
-    azure_endpoint_info: Res<AzureEndpointInfo>
+    azure_endpoint_info: Res<AzureEndpointInfo>,
 ) {
     let port = if azure_endpoint_info.port == 0 {
         8081

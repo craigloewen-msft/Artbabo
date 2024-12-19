@@ -250,13 +250,14 @@ fn setup_networking(
     settings: Res<NetworkSettings>,
     task_pool: Res<EventworkRuntime<TaskPool>>,
 ) {
-    info!("Setting up networking and wanting to connect");
 
     let connect_string = if DEBUG_MODE {
         "ws://127.0.0.1:8081"
     } else {
         "ws://52.180.68.180:8081"
     };
+
+    info!("Setting up networking and wanting to connect at {}", connect_string);
 
     net.connect(
         url::Url::parse(connect_string).unwrap(),

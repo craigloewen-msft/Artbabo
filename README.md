@@ -6,7 +6,7 @@ Site is available at: http://artbabo-bub2g5b5e3awg3gp.eastus-01.azurewebsites.ne
 
 ## Debugging
 
-- Run `cargo watch -cx "run -p artbabo"` to debug backend
+- Run `cd backend && cargo watch -cx run` to debug backend
 - Run `cd frontend && cargo watch -cx "run --target wasm32-unknown-unknown"` to debug frontend
 
 ## Releasing
@@ -16,8 +16,7 @@ Site is available at: http://artbabo-bub2g5b5e3awg3gp.eastus-01.azurewebsites.ne
 ```
 cd frontend
 cargo build --release --target wasm32-unknown-unknown
-asm-bindgen --no-typescript --target web --out-dir ../docs/ --out-name "mygame" ../target/wasm32-unknown-unkno
-wn/release/artbabo_frontend.wasm
+wasm-bindgen --no-typescript --target web --out-dir ../docs/ --out-name "mygame" ../target/wasm32-unknown-unknown/release/artbabo_frontend.wasm
 ```
 
 ## Deploying

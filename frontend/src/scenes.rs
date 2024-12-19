@@ -182,6 +182,28 @@ pub fn add_waiting_room_scenes(app: &mut App) {
     );
 }
 
+// === PromptGeneration scenes ===
+
+pub fn draw_prompt_generation_scene(
+    mut contexts: EguiContexts,
+) {
+    // Display simple 'please wait' message
+    egui::Window::new("prompt_generation_area".to_string())
+        .anchor(Align2::CENTER_TOP, (0., 10.))
+        .show(contexts.ctx_mut(), |ui| {
+            ui.vertical(|ui| {
+                ui.label("Please wait for other players to finish generating prompts");
+            });
+        });
+}
+
+pub fn add_prompt_generation_scenes(app: &mut App) {
+    app.add_systems(
+        Update,
+        draw_prompt_generation_scene.run_if(in_state(GameState::PromptGenerationWaiting)),
+    );
+}
+
 // === ImageCreation scenes ===
 
 pub fn draw_image_creation_ui(
@@ -663,6 +685,7 @@ pub fn add_scenes(app: &mut App) {
     app.add_systems(Update, draw_version_number);
     add_intro_scenes(app);
     add_waiting_room_scenes(app);
+    add_prompt_generation_scenes(app);
     add_image_creation_scenes(app);
     add_backend_server_connections(app);
     add_bidding_round_scenes(app);

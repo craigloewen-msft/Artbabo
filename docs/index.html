@@ -18,7 +18,8 @@
     import init from './mygame.js'
 
     init().then(() => {
-      document.getElementById('loading-message').remove();
+      console.log("Game initialized");
+      document.getElementById('loading-message').style.display = 'none';
     }).catch((error) => {
       if (!error.message.startsWith("Using exceptions for control flow, don't mind me. This isn't actually an error!")) {
         throw error;

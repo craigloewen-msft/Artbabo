@@ -435,6 +435,11 @@ pub fn draw_bidding_round_ui(
                         }
                     });
 
+                    ui.vertical( |ui| {
+                        ui.label("Player money:");
+                        ui.label(format!("{}", current_player.money));
+                    });
+
                     ui.vertical(|ui| {
                         ui.add_space(1.0);
                     });

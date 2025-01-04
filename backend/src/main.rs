@@ -1,13 +1,5 @@
-use bevy::ecs::query::QueryFilter;
-use bevy::log::Level;
-use bevy::prelude::*;
-use bevy::tasks::TaskPoolBuilder;
-use bevy::winit::WinitSettings;
-use bevy::{log::LogPlugin, tasks::TaskPool};
-use bevy_eventwork::{
-    AppNetworkMessage, ConnectionId, EventworkRuntime, Network, NetworkData, NetworkEvent,
-    NetworkMessage,
-};
+use colored::Color;
+use colored::Colorize;
 use rand::rngs::StdRng;
 
 use std::collections::HashMap;
@@ -17,8 +9,6 @@ use std::net::SocketAddr;
 use std::ops::DerefMut;
 use std::time::Duration;
 
-use bevy::tasks::{futures_lite::future, AsyncComputeTaskPool, Task};
-
 use reqwest::blocking::Client;
 
 use serde_json::json;
@@ -27,23 +17,29 @@ use serde_json::Value;
 use rand::seq::SliceRandom;
 use rand::{thread_rng, Rng, SeedableRng};
 
-use bevy_eventwork_mod_websockets::*;
-
 use chrono::{DateTime, Utc};
+
+use env_logger::Builder;
+use log::{error, info, LevelFilter};
+use std::io::Write;
 
 extern crate server_responses;
 use server_responses::*;
 
-#[derive(Component)]
-struct PublicRoom;
+use rocket::futures::lock::Mutex;
+use rocket::tokio;
+use std::sync::Arc;
 
-#[derive(Component)]
-struct PrivateRoom;
+use event_work_server::{EventWorkSendMessages, EventWorkSender, EventWorkServer, NetworkEvent};
+use rocket::State;
 
-#[derive(Component)]
-struct InGame;
+extern crate event_work_server;
+use event_work_server::*;
 
-#[derive(Resource, Default)]
+#[macro_use]
+extern crate rocket;
+
+#[derive(Default, Clone)]
 struct AzureEndpointInfo {
     image_gen_endpoint: String,
     image_gen_key: String,
@@ -52,44 +48,11 @@ struct AzureEndpointInfo {
     port: u16,
 }
 
-#[derive(Resource, Default)]
+#[derive(Default)]
 struct GlobalServerValues {
     next_available_image_server_time: DateTime<Utc>,
     next_available_prompt_server_time: DateTime<Utc>,
-}
-
-#[derive(Debug, Component)]
-struct ImageGenerationTask {
-    task: Task<Result<String, String>>,
-    prompt_data: PromptInfoDataRequest,
-    status: TaskCompletionStatus,
-}
-
-#[derive(Debug, Component)]
-struct CheckPromptTask {
-    task: Task<Result<(), String>>,
-    prompt_data: PromptInfoDataRequest,
-    status: TaskCompletionStatus,
-}
-
-#[derive(Debug, Component)]
-struct PromptGenerationTask {
-    task: Task<Result<Vec<String>, String>>,
-    status: TaskCompletionStatus,
-}
-
-#[derive(Debug, Component)]
-struct HintGenerationTask {
-    task: Task<Result<HashMap<u32, Vec<String>>, String>>,
-    status: TaskCompletionStatus,
-}
-
-#[derive(Component, Default)]
-struct RoomStateServerInfo {
-    image_task_list: Vec<ImageGenerationTask>,
-    prompt_task_list: Vec<CheckPromptTask>,
-    prompt_generation_task_list: Vec<PromptGenerationTask>,
-    hint_generation_task_list: Vec<HintGenerationTask>,
+    endpoint_info: AzureEndpointInfo,
 }
 
 struct PromptInfoForHint {
@@ -99,53 +62,221 @@ struct PromptInfoForHint {
     player_id: u32,
 }
 
-#[derive(Component)]
-struct GameCleanupTimer(Timer);
-
-fn main() {
-    info!("Building app");
-    let mut app = App::new();
-
-    app.add_plugins(MinimalPlugins)
-        .add_plugins(LogPlugin {
-            level: Level::DEBUG,
-            filter: "wgpu=error,bevy_render=info,bevy_ecs=trace".to_string(),
-            custom_layer: |_| None,
-        })
-        .add_plugins(bevy_eventwork::EventworkPlugin::<WebSocketProvider, TaskPool>::default())
-        .insert_resource(EventworkRuntime(
-            TaskPoolBuilder::new().num_threads(2).build(),
-        ))
-        .insert_resource(NetworkSettings::default())
-        .insert_resource(AzureEndpointInfo::default())
-        .insert_resource(GlobalServerValues::default())
-        .insert_resource(WinitSettings {
-            focused_mode: bevy::winit::UpdateMode::reactive_low_power(Duration::from_millis(5000)),
-            unfocused_mode: bevy::winit::UpdateMode::reactive_low_power(Duration::from_millis(
-                5000,
-            )),
-        })
-        .add_systems(Startup, setup_connections)
-        .add_systems(Startup, setup_networking.after(setup_connections))
-        .add_systems(Update, handle_connection_events)
-        .add_systems(Update, tick_timers)
-        .add_systems(Update, handle_timer_events)
-        .add_systems(Update, tick_cleanup_timer)
-        .add_systems(Update, handle_cleanup_timer)
-        .add_systems(Update, handle_image_generation_tasks)
-        .add_systems(Update, handle_check_prompt_tasks)
-        .add_systems(Update, handle_prompt_generation_tasks)
-        .add_systems(Update, handle_hint_generation_tasks)
-        .listen_for_message::<RoomJoinRequest, WebSocketProvider>()
-        .add_systems(Update, room_join_request)
-        .listen_for_message::<StartGameRequest, WebSocketProvider>()
-        .add_systems(Update, start_game_request)
-        .listen_for_message::<PromptInfoDataRequest, WebSocketProvider>()
-        .add_systems(Update, prompt_info_data_update)
-        .listen_for_message::<GameActionRequest, WebSocketProvider>()
-        .add_systems(Update, game_action_request_update)
-        .run();
+#[derive(Debug, Clone)]
+struct RoomList {
+    rooms: HashMap<usize, RoomState>,
+    id_count: usize,
 }
+
+impl RoomList {
+    fn new() -> Self {
+        RoomList {
+            rooms: HashMap::new(),
+            id_count: 0,
+        }
+    }
+
+    fn room_state_insert(&mut self, mut room: RoomState) -> usize {
+        self.id_count += 1;
+        room.room_id = self.id_count as u32;
+        let room_id = room.room_id as usize;
+        self.insert(room_id, room);
+        return room_id;
+    }
+
+    fn insert(&mut self, id: usize, room: RoomState) -> Option<RoomState> {
+        self.rooms.insert(id, room)
+    }
+
+    fn get_new_room_id(&self) -> usize {
+        self.id_count + 1
+    }
+
+    fn get(&self, id: &usize) -> Option<&RoomState> {
+        trace!("Getting room with id: {}", id);
+        self.rooms.get(id)
+    }
+
+    fn get_mut(&mut self, id: &usize) -> Option<&mut RoomState> {
+        self.rooms.get_mut(id)
+    }
+
+    fn remove(&mut self, id: &usize) -> Option<RoomState> {
+        self.rooms.remove(id)
+    }
+
+    fn iter(&self) -> std::collections::hash_map::Iter<usize, RoomState> {
+        self.rooms.iter()
+    }
+
+    fn iter_mut(&mut self) -> std::collections::hash_map::IterMut<usize, RoomState> {
+        self.rooms.iter_mut()
+    }
+
+    fn values(&self) -> std::collections::hash_map::Values<usize, RoomState> {
+        self.rooms.values()
+    }
+
+    fn rooms(&self) -> &HashMap<usize, RoomState> {
+        &self.rooms
+    }
+}
+
+#[get("/")]
+fn hello() -> &'static str {
+    "Hello, world!"
+}
+
+#[get("/ws")]
+fn websocket_connect<'r>(
+    ws: ws::WebSocket,
+    eventwork_server: &'r State<Arc<Mutex<EventWorkServer>>>,
+) -> ws::Channel<'r> {
+    ws.channel(move |stream| {
+        Box::pin(async move {
+            let server_listen_await_function_result = {
+                eventwork_server
+                    .lock()
+                    .await
+                    .handle_new_connection(stream)
+                    .await
+            };
+            match server_listen_await_function_result {
+                Ok(server_listen_function) => {
+                    server_listen_function().await.unwrap();
+                }
+                Err(e) => {
+                    eprintln!("Failed to handle connection: {}", e);
+                }
+            }
+            Ok(())
+        })
+    })
+}
+
+#[launch]
+async fn rocket() -> _ {
+    let mut builder = Builder::from_default_env();
+
+    builder
+        .format(|buf, record| {
+            let color = match record.level() {
+                log::Level::Error => Color::Red,
+                log::Level::Warn => Color::Yellow,
+                log::Level::Info => Color::Green,
+                log::Level::Debug => Color::Blue,
+                log::Level::Trace => Color::Magenta,
+            };
+
+            let file_path = record.file().unwrap_or("unknown");
+            let relative_file_path = file_path.strip_prefix("/home/craig/dev/Artbabo/").unwrap_or("");
+
+            writeln!(
+                buf,
+                "{}",
+                format!(
+                    "{}:{} [{}] - {}",
+                    relative_file_path,
+                    record.line().unwrap_or(0),
+                    record.level(),
+                    record.args()
+                ).color(color)
+            )
+        })
+        .filter(None, LevelFilter::Info)
+        .init();
+
+    let mut eventwork_server_original = EventWorkServer::default();
+    eventwork_server_original.init().await;
+
+    let azure_info_reference = Arc::new(Mutex::new(GlobalServerValues {
+        endpoint_info: get_azure_info(),
+        ..Default::default()
+    }));
+
+    let eventwork_server_reference = Arc::new(Mutex::new(eventwork_server_original));
+    let room_state_list_reference = Arc::new(Mutex::new(RoomList::new()));
+
+    let mut eventwork_server = eventwork_server_reference.lock().await;
+
+    if let Err(e) = eventwork_server
+        .register_message::<RoomJoinRequest>({
+            let room_state_list_reference_clone = room_state_list_reference.clone();
+            Arc::new(move |sender: EventWorkSender| {
+                Box::pin(room_join_request(
+                    sender,
+                    room_state_list_reference_clone.clone(),
+                ))
+            })
+        })
+        .await
+    {
+        eprintln!("Failed to register message: {}", e);
+    }
+
+    eventwork_server
+        .on_network_event({
+            let room_state_list_reference_clone = room_state_list_reference.clone();
+            let eventwork_server_reference_clone = eventwork_server_reference.clone();
+            Arc::new(move |network_event: NetworkEvent| {
+                Box::pin(handle_connection_events(
+                    network_event,
+                    room_state_list_reference_clone.clone(),
+                    eventwork_server_reference_clone.clone(),
+                ))
+            })
+        })
+        .await;
+
+    rocket::build()
+        .manage(eventwork_server_reference.clone())
+        .mount("/", routes![hello, websocket_connect])
+}
+
+// fn main() {
+//     info!("Building app");
+//     let mut app = App::new();
+
+//     app.add_plugins(MinimalPlugins)
+//         .add_plugins(LogPlugin {
+//             level: Level::DEBUG,
+//             filter: "wgpu=error,bevy_render=info,bevy_ecs=trace".to_string(),
+//             custom_layer: |_| None,
+//         })
+//         .add_plugins(bevy_eventwork::EventworkPlugin::<WebSocketProvider, TaskPool>::default())
+//         .insert_resource(EventworkRuntime(
+//             TaskPoolBuilder::new().num_threads(2).build(),
+//         ))
+//         .insert_resource(NetworkSettings::default())
+//         .insert_resource(AzureEndpointInfo::default())
+//         .insert_resource(GlobalServerValues::default())
+//         .insert_resource(WinitSettings {
+//             focused_mode: bevy::winit::UpdateMode::reactive_low_power(Duration::from_millis(5000)),
+//             unfocused_mode: bevy::winit::UpdateMode::reactive_low_power(Duration::from_millis(
+//                 5000,
+//             )),
+//         })
+//         .add_systems(Startup, setup_connections)
+//         .add_systems(Startup, setup_networking.after(setup_connections))
+//         .add_systems(Update, handle_connection_events)
+//         .add_systems(Update, tick_timers)
+//         .add_systems(Update, handle_timer_events)
+//         .add_systems(Update, tick_cleanup_timer)
+//         .add_systems(Update, handle_cleanup_timer)
+//         .add_systems(Update, handle_image_generation_tasks)
+//         .add_systems(Update, handle_check_prompt_tasks)
+//         .add_systems(Update, handle_prompt_generation_tasks)
+//         .add_systems(Update, handle_hint_generation_tasks)
+//         .listen_for_message::<RoomJoinRequest, WebSocketProvider>()
+//         .add_systems(Update, room_join_request)
+//         .listen_for_message::<StartGameRequest, WebSocketProvider>()
+//         .add_systems(Update, start_game_request)
+//         .listen_for_message::<PromptInfoDataRequest, WebSocketProvider>()
+//         .add_systems(Update, prompt_info_data_update)
+//         .listen_for_message::<GameActionRequest, WebSocketProvider>()
+//         .add_systems(Update, game_action_request_update)
+//         .run();
+// }
 
 // === Helper Functions ===
 
@@ -661,46 +792,26 @@ async fn get_chat_completion(
     return Err(error_string);
 }
 
-fn send_message_to_all_players<T>(
-    round_end_info: &T,
+async fn send_message_to_all_players<T, N>(
+    message: &T,
     room_state: &RoomState,
-    net: &Res<Network<WebSocketProvider>>,
+    net: &N,
 ) -> Result<(), String>
 where
     T: Clone + NetworkMessage,
+    N: EventWorkSendMessages,
 {
     for player in room_state.players.iter() {
-        match net.send_message(ConnectionId { id: player.id }, round_end_info.clone()) {
+        match net.send_message(player.id as usize, message.clone()).await {
             Ok(_) => {}
             Err(e) => {
-                error!("Failed to send message: {:?}", e);
-                return Err(format!("Failed to send message: {:?}", e));
+                error!("Non-fatal error: Failed to send message: {:?}", e);
             }
         }
     }
 
     Ok(())
 }
-
-// fn update_prompts_for_all_players(
-//     room_state: &RoomState,
-//     net: &Res<Network<WebSocketProvider>>,
-// ) -> Result<(), String> {
-//     for player in room_state.players.iter() {
-//         match net.send_message(ConnectionId { id: player.id }, player.prompt_data.clone()) {
-//             Ok(_) => info!(
-//                 "Sent prompt info to {} with id {}",
-//                 player.username, player.id
-//             ),
-//             Err(e) => {
-//                 error!("Failed to send message: {:?}", e);
-//                 return Err(format!("Failed to send message: {:?}", e));
-//             }
-//         }
-//     }
-
-//     Ok(())
-// }
 
 fn check_if_room_is_prepped(room_state: &RoomState) -> bool {
     if room_state.players.len() == 0 {
@@ -722,12 +833,51 @@ fn check_if_room_is_prepped(room_state: &RoomState) -> bool {
     }
 }
 
-fn progress_round(
+fn create_round_timer_task(
+    room_id: usize,
+    room_state_list_reference: Arc<Mutex<RoomList>>,
+    net_reference: Arc<Mutex<EventWorkSender>>,
+    sleep_time: u64,
+) {
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(sleep_time)).await;
+        // Try and find room, if it exists then progress round
+        let mut room_state_list = room_state_list_reference.lock().await;
+        if let Some(room_state) = room_state_list.get_mut(&room_id) {
+            let room_state_clone = room_state.clone();
+
+            progress_round(
+                room_state,
+                room_state_list_reference.clone(),
+                net_reference.clone(),
+            )
+            .await;
+
+            let net = net_reference.lock().await;
+
+            match send_message_to_all_players::<RoomState, EventWorkSender>(
+                &room_state_clone,
+                &room_state_clone,
+                &net,
+            )
+            .await
+            {
+                Ok(_) => info!(
+                    "Updated player state for all players in room {}",
+                    room_state.room_id
+                ),
+                Err(e) => error!("Failed to send message: {:?}", e),
+            }
+        } else {
+            error!("Failed to find room {} to progress round", room_id);
+        }
+    });
+}
+
+async fn progress_round(
     room_state: &mut RoomState,
-    timer: &mut RoundTimer,
-    commands: &mut Commands,
-    entity: Entity,
-    net: &Res<Network<WebSocketProvider>>,
+    room_state_list_reference: Arc<Mutex<RoomList>>, // If you lock on this it will cause a deadlock
+    net_reference: Arc<Mutex<EventWorkSender>>,
 ) {
     info!(
         "Progressing round for room {} from {:?}",
@@ -736,42 +886,42 @@ fn progress_round(
     match room_state.game_state {
         GameState::WaitingRoom => {
             room_state.game_state = GameState::PromptGenerationWaiting;
-            commands.entity(entity).insert(InGame);
         }
         GameState::PromptGenerationWaiting => {
             room_state.game_state = GameState::ImageCreation;
-
-            // Set game timer
-            timer.0 = Timer::from_seconds(10.0, TimerMode::Once);
-            timer.0.pause();
-
-            // Set clean up timer
-            commands
-                .entity(entity)
-                .insert(GameCleanupTimer(Timer::from_seconds(
-                    ((BIDDING_ROUND_TIME + BIDDING_ROUND_END_TIME)
-                            * room_state.prompts_per_player as f32
-                            * room_state.players.len() as f32
-                        + END_SCORE_SCREEN_TIME
-                        + 130.0 ) // For creating the initial images
-                        * 4.0, // Add a 4 x safety to be safe
-                    TimerMode::Once,
-                )));
         }
         GameState::ImageCreation => {
             room_state.game_state = GameState::BiddingRound;
             room_state.setup_next_round();
-            timer.0 = Timer::from_seconds(BIDDING_ROUND_TIME, TimerMode::Once);
+
+            create_round_timer_task(
+                room_state.room_id as usize,
+                room_state_list_reference,
+                net_reference,
+                BIDDING_ROUND_TIME,
+            );
         }
         GameState::BiddingRound => {
             room_state.game_state = GameState::BiddingRoundEnd;
-            timer.0 = Timer::from_seconds(BIDDING_ROUND_END_TIME, TimerMode::Once);
             let round_end_info_option = room_state.finalize_round();
+
+            create_round_timer_task(
+                room_state.room_id as usize,
+                room_state_list_reference,
+                net_reference.clone(),
+                BIDDING_ROUND_END_TIME,
+            );
+
+            let net = net_reference.lock().await;
 
             // Send round end info to all players
             if let Some(round_end_info) = round_end_info_option {
-                let _ =
-                    send_message_to_all_players::<RoundEndInfo>(&round_end_info, room_state, net);
+                let _ = send_message_to_all_players::<RoundEndInfo, EventWorkSender>(
+                    &round_end_info,
+                    room_state,
+                    &net,
+                )
+                .await;
             } else {
                 error!("Failed to finalize round: {:?}", room_state);
             }
@@ -779,17 +929,34 @@ fn progress_round(
         GameState::BiddingRoundEnd => {
             if room_state.remaining_prompts.len() > 0 {
                 room_state.game_state = GameState::BiddingRound;
-                timer.0 = Timer::from_seconds(BIDDING_ROUND_TIME, TimerMode::Once);
                 room_state.setup_next_round();
+                create_round_timer_task(
+                    room_state.room_id as usize,
+                    room_state_list_reference,
+                    net_reference.clone(),
+                    BIDDING_ROUND_TIME,
+                );
             } else {
                 room_state.game_state = GameState::EndScoreScreen;
-                timer.0 = Timer::from_seconds(END_SCORE_SCREEN_TIME, TimerMode::Once);
                 let game_end_info_option = room_state.get_game_end_info();
+
+                create_round_timer_task(
+                    room_state.room_id as usize,
+                    room_state_list_reference,
+                    net_reference.clone(),
+                    END_SCORE_SCREEN_TIME,
+                );
+
+                let net = net_reference.lock().await;
 
                 // Send game end info to all players
                 if let Some(game_end_info) = game_end_info_option {
-                    let _ =
-                        send_message_to_all_players::<GameEndInfo>(&game_end_info, room_state, net);
+                    let _ = send_message_to_all_players::<GameEndInfo, EventWorkSender>(
+                        &game_end_info,
+                        room_state,
+                        &net,
+                    )
+                    .await;
                 } else {
                     error!("Failed to finalize game: {:?}", room_state);
                 }
@@ -798,57 +965,20 @@ fn progress_round(
         GameState::EndScoreScreen => {
             room_state.game_state = GameState::Intro;
             info!("Game ended for room {}, removing room", room_state.room_id);
-            commands.entity(entity).despawn_recursive();
+            let room_to_delete_id = room_state.room_id as usize;
+            let room_state_list_reference_clone = room_state_list_reference.clone();
+            tokio::spawn(async move {
+                room_state_list_reference_clone
+                    .lock()
+                    .await
+                    .remove(&room_to_delete_id);
+            });
         }
         _ => {
             error!(
                 "Progress round called but no handler found for: {:?}",
                 room_state.game_state
             );
-            commands.entity(entity).remove::<RoundTimer>();
-        }
-    }
-    // TODO: Despawn and clean up everything else
-}
-
-fn find_and_handle_room<T, Q>(
-    mut new_messages: EventReader<NetworkData<T>>,
-    net: &Res<Network<WebSocketProvider>>,
-    query: &mut Query<
-        (
-            Entity,
-            &mut RoomState,
-            &mut RoundTimer,
-            &mut RoomStateServerInfo,
-        ),
-        Q,
-    >,
-    mut callback: impl FnMut(
-        &mut RoomState,
-        &mut RoundTimer,
-        &mut RoomStateServerInfo,
-        &Res<Network<WebSocketProvider>>,
-        &Entity,
-        &NetworkData<T>,
-    ),
-) where
-    T: HasRoomId + Debug + Event,
-    Q: QueryFilter, // Makes the filter generic, allowing flexible `Query` options
-{
-    for message in new_messages.read() {
-        info!("Received new message: {:?}", message);
-        // Get the room state entity
-        for (entity, mut room_state, mut timer, mut room_state_server_info) in query.iter_mut() {
-            if entity.index() == message.room_id() {
-                callback(
-                    &mut room_state,
-                    &mut timer,
-                    &mut room_state_server_info,
-                    net,
-                    &entity,
-                    message,
-                );
-            }
         }
     }
 }
@@ -872,7 +1002,7 @@ fn increment_server_time(server_time: &mut DateTime<Utc>, time_to_increment: u64
 // === Scene handling functions ===
 
 // === Core functionality ===
-fn setup_connections(mut azure_endpoint_info: ResMut<AzureEndpointInfo>) {
+fn get_azure_info() -> AzureEndpointInfo {
     dotenv::dotenv().ok();
     let azure_ai_image_key = env::var("AZURE_AI_IMAGE_KEY").unwrap_or_else(|_| {
         error!("Warning: AZURE_AI_IMAGE_KEY is not set");
@@ -902,957 +1032,935 @@ fn setup_connections(mut azure_endpoint_info: ResMut<AzureEndpointInfo>) {
             0 // Default to 0 or any other appropriate port number
         });
 
-    azure_endpoint_info.image_gen_endpoint = azure_ai_image_endpoint;
-    azure_endpoint_info.image_gen_key = azure_ai_image_key;
-    azure_endpoint_info.completions_endpoint = azure_ai_completions_endpoint;
-    azure_endpoint_info.completions_key = azure_ai_completions_key;
-    azure_endpoint_info.port = port;
-}
-
-fn setup_networking(
-    mut net: ResMut<Network<WebSocketProvider>>,
-    settings: Res<NetworkSettings>,
-    task_pool: Res<EventworkRuntime<TaskPool>>,
-    azure_endpoint_info: Res<AzureEndpointInfo>,
-) {
-    let port = if azure_endpoint_info.port == 0 {
-        8081
-    } else {
-        azure_endpoint_info.port
+    let azure_endpoint_info = AzureEndpointInfo {
+        image_gen_endpoint: azure_ai_image_endpoint,
+        image_gen_key: azure_ai_image_key,
+        completions_endpoint: azure_ai_completions_endpoint,
+        completions_key: azure_ai_completions_key,
+        port: port,
     };
 
-    let socket_address = if DEBUG_MODE {
-        SocketAddr::new(
-            "127.0.0.1".parse().expect("Could not parse ip address"),
-            port,
-        )
-    } else {
-        SocketAddr::new("0.0.0.0".parse().expect("Could not parse ip address"), port)
-    };
-
-    info!("Address of the server: {}", socket_address.to_string());
-
-    match net.listen(socket_address, &task_pool.0, &settings) {
-        Ok(_) => (),
-        Err(err) => {
-            error!("Could not start listening: {}", err);
-            panic!();
-        }
-    }
-
-    info!("Started listening for new connections!");
+    azure_endpoint_info
 }
 
-fn handle_connection_events(
-    mut network_events: EventReader<NetworkEvent>,
-    mut query: Query<(Entity, &mut RoomState)>,
-    net: Res<Network<WebSocketProvider>>,
-    mut commands: Commands,
-) {
-    for event in network_events.read() {
-        if let NetworkEvent::Connected(conn_id) = event {
-            info!("New player connected: {}", conn_id);
-        } else if let NetworkEvent::Disconnected(conn_id) = event {
-            info!("Player disconnected: {}", conn_id);
-            for (entity, mut room_state) in query.iter_mut() {
-                room_state.disconnect_player(*conn_id);
+async fn handle_connection_events(
+    event: NetworkEvent,
+    room_state_list_reference: Arc<Mutex<RoomList>>,
+    net_reference: Arc<Mutex<EventWorkServer>>,
+) -> Result<(), String> {
+    if let NetworkEvent::Connected(conn_id) = event {
+        info!("New player connected: {}", conn_id);
+    } else if let NetworkEvent::Disconnected(conn_id) = event {
+        info!("Player disconnected: {}", conn_id);
 
-                if room_state.players.len() == 0 {
-                    info!("Room {} is empty, despawning", room_state.room_id);
-                    commands.entity(entity).despawn_recursive();
-                } else {
-                    // Send updated room state to all players
-                    let room_state_deref_mut = room_state.deref_mut();
-                    match send_message_to_all_players::<RoomState>(
-                        &room_state_deref_mut,
-                        &room_state_deref_mut,
-                        &net,
-                    ) {
-                        Ok(_) => info!(
-                            "Updated player state for all players in room {}",
-                            room_state.room_id
-                        ),
-                        Err(e) => error!("Failed to send message: {:?}", e),
-                    }
-                }
-            }
-        }
-    }
-}
-
-fn tick_timers(time: Res<Time>, mut query: Query<&mut RoundTimer>) {
-    for mut timer in query.iter_mut() {
-        timer.0.tick(time.delta());
-    }
-}
-
-fn handle_timer_events(
-    mut query: Query<(
-        Entity,
-        &mut RoomState,
-        &mut RoomStateServerInfo,
-        &mut RoundTimer,
-    )>,
-    mut commands: Commands,
-    net: Res<Network<WebSocketProvider>>,
-) {
-    for (entity, mut room_state, mut _room_state_server_info, mut timer) in query.iter_mut() {
-        if timer.0.finished() {
-            info!("Timer finished for room {}", room_state.room_id);
-            progress_round(
-                room_state.deref_mut(),
-                timer.deref_mut(),
-                &mut commands,
-                entity,
-                &net,
-            );
-
-            // Send updated room state to all players
-            let room_state_deref_mut = room_state.deref_mut();
-            match send_message_to_all_players::<RoomState>(
-                &room_state_deref_mut,
-                &room_state_deref_mut,
-                &net,
-            ) {
-                Ok(_) => info!(
-                    "Updated player state for all players in room {}",
-                    room_state.room_id
-                ),
-                Err(e) => error!("Failed to send message: {:?}", e),
-            }
-        }
-    }
-}
-
-fn tick_cleanup_timer(time: Res<Time>, mut query: Query<&mut GameCleanupTimer>) {
-    for mut timer in query.iter_mut() {
-        timer.0.tick(time.delta());
-    }
-}
-
-fn handle_cleanup_timer(
-    mut query: Query<(Entity, &RoomState, &GameCleanupTimer)>,
-    mut commands: Commands,
-) {
-    for (entity, room_state, timer) in query.iter_mut() {
-        if timer.0.finished() {
-            info!(
-                "Cleanup timer finished for room {}, removing",
-                room_state.room_id
-            );
-            commands.entity(entity).despawn_recursive();
-        }
-    }
-}
-
-fn handle_image_generation_tasks(
-    mut commands: Commands,
-    net: Res<Network<WebSocketProvider>>,
-    mut query: Query<(
-        Entity,
-        &mut RoomState,
-        &mut RoomStateServerInfo,
-        &mut RoundTimer,
-    )>,
-) {
-    for (entity, mut room_state, mut room_state_server_info, mut timer) in query.iter_mut() {
-        let remaining_tasks = room_state_server_info.image_task_list.len();
-        let mut task_completed = false;
-        for compute_task_info in room_state_server_info.image_task_list.iter_mut() {
-            if let Some(string_option) =
-                future::block_on(future::poll_once(&mut compute_task_info.task))
-            {
-                info!(
-                    "Handling result of image generation task: {:?}",
-                    compute_task_info
-                );
-
-                match string_option {
-                    Ok(string_value) => {
-                        task_completed = true;
-                        info!(
-                            "Image generation completed: {:?}, remaining tasks: {}",
-                            string_value, remaining_tasks
-                        );
-                        compute_task_info.prompt_data.prompt.image_url = string_value.clone();
-                        compute_task_info.status = TaskCompletionStatus::Completed;
-
-                        // Send completed prompt to player
-                        let mut return_prompt_data = compute_task_info.prompt_data.clone();
-                        return_prompt_data.state = PromptState::FullyCompleted;
-
-                        // Add the prompt to the remaining prompts
-                        let completed_prompt =
-                            std::mem::take(&mut compute_task_info.prompt_data.prompt);
-
-                        room_state.remaining_prompts.push(completed_prompt);
-
-                        info!("Sending prompt info to player: {:?}", return_prompt_data);
-
-                        match net.send_message(
-                            ConnectionId {
-                                id: return_prompt_data.prompt.owner_id,
-                            },
-                            return_prompt_data,
-                        ) {
-                            Ok(_) => info!("Sent prompt info successfully",),
-                            Err(e) => {
-                                error!("Failed to send image generation message: {:?}", e);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        error!("Task failed to complete: {:?}", compute_task_info);
-                        compute_task_info.status = TaskCompletionStatus::Error;
-
-                        let mut return_prompt_data = compute_task_info.prompt_data.clone();
-
-                        // Send an error message to the player
-                        return_prompt_data.error_message = e.clone();
-                        return_prompt_data.state = PromptState::Error;
-                        match net.send_message(
-                            ConnectionId {
-                                id: return_prompt_data.prompt.owner_id,
-                            },
-                            return_prompt_data,
-                        ) {
-                            Ok(_) => info!("Sent prompt info successfully",),
-                            Err(e) => {
-                                error!("Failed to send message: {:?}", e);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        // Remove all finished tasks
-        room_state_server_info
-            .image_task_list
-            .retain(|task| task.status == TaskCompletionStatus::InProgress);
-
-        // If room is ready to go then proceed
-        if task_completed {
-            if check_if_room_is_prepped(&room_state) {
-                info!(
-                    "All tasks are completed for room {}, progressing to next round",
-                    room_state.room_id
-                );
-                progress_round(
-                    room_state.deref_mut(),
-                    timer.deref_mut(),
-                    &mut commands,
-                    entity,
-                    &net,
-                );
-
-                // Send updated room state to all players
-                let room_state_deref_mut = room_state.deref_mut();
-                match send_message_to_all_players::<RoomState>(
-                    &room_state_deref_mut,
-                    &room_state_deref_mut,
-                    &net,
-                ) {
-                    Ok(_) => info!(
-                        "Updated player state for all players in room {}",
-                        room_state.room_id
-                    ),
-                    Err(e) => error!("Failed to send message: {:?}", e),
-                }
-            }
-        }
-    }
-}
-
-fn handle_check_prompt_tasks(
-    net: Res<Network<WebSocketProvider>>,
-    mut query: Query<(
-        Entity,
-        &mut RoomState,
-        &mut RoundTimer,
-        &mut RoomStateServerInfo,
-    )>,
-    azure_endpoint_info: Res<AzureEndpointInfo>,
-    mut global_server_values: ResMut<GlobalServerValues>,
-) {
-    for (_entity, _room_state, _timer, mut room_state_server_info) in query.iter_mut() {
-        if room_state_server_info.prompt_task_list.len() > 0 {
-            let mut new_image_tasks = Vec::new();
-
-            for compute_task_info in room_state_server_info.prompt_task_list.iter_mut() {
-                if let Some(prompt_check_success) =
-                    future::block_on(future::poll_once(&mut compute_task_info.task))
-                {
-                    info!(
-                        "Handling result of check prompt task: {:?}",
-                        compute_task_info
-                    );
-
-                    match prompt_check_success {
-                        Ok(_) => {
-                            info!("Prompt check completed successfully");
-                            compute_task_info.status = TaskCompletionStatus::Completed;
-
-                            // Create a task to get the image URL for each prompt
-                            let thread_pool = AsyncComputeTaskPool::get();
-
-                            let endpoint = azure_endpoint_info.image_gen_endpoint.clone();
-                            let api_key = azure_endpoint_info.image_gen_key.clone();
-                            let input_string =
-                                compute_task_info.prompt_data.prompt.prompt_answer.clone();
-
-                            let time_to_wait = increment_server_time(
-                                &mut global_server_values.next_available_image_server_time,
-                                IMAGE_GEN_TIMEOUT_SECS,
-                            );
-
-                            info!("Starting image generation task in {} seconds", time_to_wait);
-
-                            let task = thread_pool.spawn(async move {
-                                std::thread::sleep(Duration::from_secs(time_to_wait as u64));
-                                get_image_url(input_string, endpoint, api_key).await
-                            });
-
-                            new_image_tasks.push(ImageGenerationTask {
-                                task,
-                                prompt_data: compute_task_info.prompt_data.clone(),
-                                status: TaskCompletionStatus::InProgress,
-                            });
-
-                            // Send completed prompt to player
-                            let mut return_prompt_data = compute_task_info.prompt_data.clone();
-                            return_prompt_data.state = PromptState::PromptCompleted;
-
-                            match net.send_message(
-                                ConnectionId {
-                                    id: return_prompt_data.prompt.owner_id,
-                                },
-                                return_prompt_data,
-                            ) {
-                                Ok(_) => info!("Sent prompt info successfully",),
-                                Err(e) => {
-                                    error!("Failed to send message: {:?}", e);
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            error!("Task failed to complete: {:?}", e);
-                            compute_task_info.status = TaskCompletionStatus::Error;
-
-                            let mut return_prompt_data = compute_task_info.prompt_data.clone();
-
-                            // Send an error message to the player
-                            return_prompt_data.error_message = e.clone();
-                            return_prompt_data.state = PromptState::Error;
-                            match net.send_message(
-                                ConnectionId {
-                                    id: return_prompt_data.prompt.owner_id,
-                                },
-                                return_prompt_data,
-                            ) {
-                                Ok(_) => info!("Sent prompt info successfully",),
-                                Err(e) => {
-                                    error!("Failed to send message: {:?}", e);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Add new image tasks to the list
-            room_state_server_info
-                .image_task_list
-                .extend(new_image_tasks);
-
-            // Remove all finished tasks
-            room_state_server_info
-                .prompt_task_list
-                .retain(|task| task.status == TaskCompletionStatus::InProgress);
-        }
-    }
-}
-
-fn handle_prompt_generation_tasks(
-    net: Res<Network<WebSocketProvider>>,
-    mut commands: Commands,
-    mut query: Query<(
-        Entity,
-        &mut RoomState,
-        &mut RoundTimer,
-        &mut RoomStateServerInfo,
-    )>,
-    azure_endpoint_info: Res<AzureEndpointInfo>,
-    mut global_server_values: ResMut<GlobalServerValues>,
-) {
-    for (entity, mut room_state, mut timer, mut room_state_server_info) in query.iter_mut() {
-        if room_state_server_info.prompt_generation_task_list.len() > 0 {
-            let mut generate_hints_check = false;
-            let mut prompt_list_for_hints = Vec::<PromptInfoForHint>::new();
-            for compute_task_info in room_state_server_info
-                .prompt_generation_task_list
-                .iter_mut()
-            {
-                if let Some(generated_prompt_list_result) =
-                    future::block_on(future::poll_once(&mut compute_task_info.task))
-                {
-                    info!(
-                        "Handling result of prompt generation task: {:?}",
-                        compute_task_info
-                    );
-
-                    match generated_prompt_list_result {
-                        Err(e) => {
-                            error!("Failed to generate prompts: {:?}", e);
-                            compute_task_info.status = TaskCompletionStatus::Error;
-
-                            // TODO: Handle this error
-                        }
-                        Ok(generated_prompt_list) => {
-                            let mut player_index = 0;
-                            let mut player_prompt_count = 0;
-
-                            compute_task_info.status = TaskCompletionStatus::Completed;
-
-                            info!("Generated prompts: {:?}", generated_prompt_list);
-
-                            // Send out prompts to all players
-                            for prompt_text in generated_prompt_list.iter() {
-                                let player = &room_state.players[player_index];
-
-                                let new_prompt = PromptInfoData {
-                                    prompt_text: prompt_text.clone(),
-                                    prompt_answer: String::default(),
-                                    image_url: String::default(),
-                                    owner_id: player.id,
-                                    art_value: thread_rng().gen_range(MIN_ART_VALUE..MAX_ART_VALUE),
-                                };
-                                let new_prompt_data = PromptInfoDataRequest {
-                                    prompt: new_prompt,
-                                    room_id: room_state.room_id,
-                                    front_end_prompt_index: None,
-                                    state: PromptState::Proposed,
-                                    error_message: String::default(),
-                                };
-
-                                prompt_list_for_hints.push(PromptInfoForHint {
-                                    prompt: new_prompt_data.prompt.prompt_text.clone(),
-                                    art_value: new_prompt_data.prompt.art_value.clone(),
-                                    owner_username: player.username.clone(),
-                                    player_id: player.id.clone(),
-                                });
-
-                                // Progress index counters
-                                player_prompt_count += 1;
-                                if player_prompt_count >= room_state.prompts_per_player {
-                                    player_index += 1;
-                                    player_prompt_count = 0;
-                                }
-
-                                // Send out prompt
-                                match net
-                                    .send_message(ConnectionId { id: player.id }, new_prompt_data)
-                                {
-                                    Ok(_) => info!(
-                                        "Sent prompt info to {} with id {}",
-                                        player.username, player.id
-                                    ),
-                                    Err(e) => {
-                                        error!("Failed to send message: {:?}", e);
-                                    }
-                                }
-                            }
-
-                            generate_hints_check = true;
-
-                            // Update room state
-                            let room_state_deref_mut = room_state.deref_mut();
-
-                            progress_round(
-                                room_state_deref_mut,
-                                timer.deref_mut(),
-                                &mut commands,
-                                entity,
-                                &net,
-                            );
-
-                            match send_message_to_all_players::<RoomState>(
-                                &room_state_deref_mut,
-                                &room_state_deref_mut,
-                                &net,
-                            ) {
-                                Ok(_) => info!("Started game in room {}", room_state.room_id),
-                                Err(e) => error!("Failed to send message: {:?}", e),
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Remove all finished tasks
-            room_state_server_info
-                .prompt_generation_task_list
-                .retain(|task| task.status == TaskCompletionStatus::InProgress);
-
-            if generate_hints_check {
-                // Start generate hints task
-                let thread_pool = AsyncComputeTaskPool::get();
-
-                let number_of_hints =
-                    room_state.players.len() as u32 * room_state.prompts_per_player;
-                let azure_endpoint_url = azure_endpoint_info.completions_endpoint.clone();
-                let azure_endpoint_key = azure_endpoint_info.completions_key.clone();
-
-                let time_to_wait = increment_server_time(
-                    &mut global_server_values.next_available_prompt_server_time,
-                    PROMPT_GEN_TIMEOUT_SECS * number_of_hints as u64,
-                );
-
-                let mut rng = StdRng::from_entropy();
-
-                info!("Starting hint generation task in {} seconds", time_to_wait);
-
-                let room_state_clone = room_state.clone();
-
-                let task = thread_pool.spawn(async move {
-                    std::thread::sleep(Duration::from_secs(time_to_wait as u64));
-                    generate_hints(
-                        &prompt_list_for_hints,
-                        &mut rng,
-                        azure_endpoint_url,
-                        azure_endpoint_key,
-                        &room_state_clone,
-                    )
-                    .await
+        // Get room which has this player
+        let (room_id, room_state_clone) = {
+            let mut room_state_list = room_state_list_reference.lock().await;
+            let room_state_with_player_option =
+                room_state_list.iter_mut().find(|(room_id, room_state)| {
+                    room_state
+                        .players
+                        .iter()
+                        .any(|player| player.id == conn_id.id)
                 });
 
-                room_state_server_info
-                    .hint_generation_task_list
-                    .push(HintGenerationTask {
-                        task,
-                        status: TaskCompletionStatus::InProgress,
-                    });
-            }
-        }
-    }
-}
-
-fn handle_hint_generation_tasks(
-    net: Res<Network<WebSocketProvider>>,
-    mut commands: Commands,
-    mut query: Query<(
-        Entity,
-        &mut RoomState,
-        &mut RoundTimer,
-        &mut RoomStateServerInfo,
-    )>,
-) {
-    for (entity, mut room_state, mut timer, mut room_state_server_info) in query.iter_mut() {
-        if room_state_server_info.hint_generation_task_list.len() > 0 {
-            let mut task_completed = false;
-            for compute_task_info in room_state_server_info.hint_generation_task_list.iter_mut() {
-                if let Some(generated_hint_list_result) =
-                    future::block_on(future::poll_once(&mut compute_task_info.task))
-                {
-                    info!(
-                        "Handling result of hint generation task: {:?}",
-                        compute_task_info
-                    );
-
-                    match generated_hint_list_result {
-                        Err(e) => {
-                            error!("Failed to generate hints: {:?}", e);
-                            compute_task_info.status = TaskCompletionStatus::Error;
-
-                            // TODO: Handle this error
-                        }
-                        Ok(generated_hint_list) => {
-                            compute_task_info.status = TaskCompletionStatus::Completed;
-                            task_completed = true;
-                            info!("Generated hints: {:?}", generated_hint_list);
-
-                            for (player_id, player_hints) in generated_hint_list.iter() {
-                                let player_option = &mut room_state
-                                    .players
-                                    .iter_mut()
-                                    .find(|player| player.id == *player_id);
-
-                                if let Some(player) = player_option {
-                                    player.hints = player_hints.clone();
-                                }
-                            }
-                        }
-                    }
+            let (room_id, room_state) = match room_state_with_player_option {
+                Some((room_id, room_state)) => (room_id, room_state),
+                None => {
+                    return Err(format!("Failed to find room with player: {}", conn_id));
                 }
-            }
-
-            // Remove all finished tasks
-            room_state_server_info
-                .hint_generation_task_list
-                .retain(|task| task.status == TaskCompletionStatus::InProgress);
-
-            if task_completed {
-                // If all image tasks are completed, then progress the round
-                if check_if_room_is_prepped(&room_state) {
-                    let room_state_deref_mut = room_state.deref_mut();
-
-                    progress_round(
-                        room_state_deref_mut,
-                        timer.deref_mut(),
-                        &mut commands,
-                        entity,
-                        &net,
-                    );
-
-                    match send_message_to_all_players::<RoomState>(
-                        &room_state_deref_mut,
-                        &room_state_deref_mut,
-                        &net,
-                    ) {
-                        Ok(_) => info!("Started game in room {}", room_state.room_id),
-                        Err(e) => error!("Failed to send message: {:?}", e),
-                    }
-                }
-            }
-        }
-    }
-}
-
-// === API Requests ===
-fn room_join_request(
-    mut new_messages: EventReader<NetworkData<RoomJoinRequest>>,
-    net: Res<Network<WebSocketProvider>>,
-    mut room_query: Query<(Entity, &mut RoomState), Without<InGame>>,
-    mut commands: Commands,
-) {
-    for new_message in new_messages.read() {
-        info!("New room join request: {:?}", new_message);
-
-        let searched_room_option = room_query
-            .iter_mut()
-            .find(|search_room_state| search_room_state.1.room_code == new_message.room_code);
-
-        if let Some(mut room) = searched_room_option {
-            // Room is found
-            info!("Found existing room for join request");
-            let room_state = room.1.deref_mut();
-
-            room_state.players.push(Player::new(
-                new_message.source().id,
-                new_message.username.clone(),
-            ));
-
-            match send_message_to_all_players::<RoomState>(room_state, room_state, &net) {
-                Ok(_) => info!(
-                    "Updated player state for all players in room {}",
-                    room_state.room_id
-                ),
-                Err(e) => error!("Failed to send message: {:?}", e),
-            }
-        } else {
-            // Else create a new entity with room state
-            info!("No room found creating a new one");
-
-            let new_room_entity = commands.spawn(PublicRoom).id();
-
-            let new_room_state = RoomState {
-                room_id: new_room_entity.index(),
-                players: vec![Player::new(
-                    new_message.source().id,
-                    new_message.username.clone(),
-                )],
-                game_state: GameState::WaitingRoom,
-                current_art_bid: ArtBidInfo::default(),
-                prompts_per_player: 100,
-                remaining_prompts: vec![],
-                used_prompts: vec![],
-                room_code: new_message.room_code.clone(),
-                version_number: GAME_VERSION,
             };
 
-            let mut inserted_timer = Timer::from_seconds(5.0, TimerMode::Once);
-            inserted_timer.pause();
+            // Remove player from room
+            room_state.players.retain(|player| player.id != conn_id.id);
 
-            commands
-                .entity(new_room_entity)
-                .insert(RoundTimer(inserted_timer));
+            (room_id.clone(), room_state.clone())
+        };
 
-            let cloned_room_state = new_room_state.clone();
+        if room_state_clone.players.len() == 0 {
+            info!("Room {} is empty, despawning", room_state_clone.room_id);
+            let mut room_state_list = room_state_list_reference.lock().await;
+            room_state_list.remove(&room_id);
+        } else {
+            let net = net_reference.lock().await;
 
-            commands.entity(new_room_entity).insert(new_room_state);
-
-            commands
-                .entity(new_room_entity)
-                .insert(RoomStateServerInfo::default());
-
-            if new_message.room_code == "" {
-                commands.entity(new_room_entity).insert(PublicRoom);
-            } else {
-                commands.entity(new_room_entity).insert(PrivateRoom);
-            }
-
-            match send_message_to_all_players::<RoomState>(
-                &cloned_room_state,
-                &cloned_room_state,
+            match send_message_to_all_players::<RoomState, EventWorkServer>(
+                &room_state_clone,
+                &room_state_clone,
                 &net,
-            ) {
+            )
+            .await
+            {
                 Ok(_) => info!(
                     "Updated player state for all players in room {}",
-                    new_room_entity.index()
+                    room_state_clone.room_id
                 ),
-                Err(e) => error!("Failed to send message: {:?}", e),
+                Err(e) => return Err(format!("Failed to send message: {:?}", e)),
+            }
+        }
+    }
+    Ok(())
+}
+
+// fn handle_image_generation_tasks(
+//     mut commands: Commands,
+//     net: Res<Network<WebSocketProvider>>,
+//     mut query: Query<(
+//         Entity,
+//         &mut RoomState,
+//         &mut RoomStateServerInfo,
+//         &mut RoundTimer,
+//     )>,
+// ) {
+//     for (entity, mut room_state, mut room_state_server_info, mut timer) in query.iter_mut() {
+//         let remaining_tasks = room_state_server_info.image_task_list.len();
+//         let mut task_completed = false;
+//         for compute_task_info in room_state_server_info.image_task_list.iter_mut() {
+//             if let Some(string_option) =
+//                 future::block_on(future::poll_once(&mut compute_task_info.task))
+//             {
+//                 info!(
+//                     "Handling result of image generation task: {:?}",
+//                     compute_task_info
+//                 );
+
+//                 match string_option {
+//                     Ok(string_value) => {
+//                         task_completed = true;
+//                         info!(
+//                             "Image generation completed: {:?}, remaining tasks: {}",
+//                             string_value, remaining_tasks
+//                         );
+//                         compute_task_info.prompt_data.prompt.image_url = string_value.clone();
+//                         compute_task_info.status = TaskCompletionStatus::Completed;
+
+//                         // Send completed prompt to player
+//                         let mut return_prompt_data = compute_task_info.prompt_data.clone();
+//                         return_prompt_data.state = PromptState::FullyCompleted;
+
+//                         // Add the prompt to the remaining prompts
+//                         let completed_prompt =
+//                             std::mem::take(&mut compute_task_info.prompt_data.prompt);
+
+//                         room_state.remaining_prompts.push(completed_prompt);
+
+//                         info!("Sending prompt info to player: {:?}", return_prompt_data);
+
+//                         match net.send_message(
+//                             ConnectionId {
+//                                 id: return_prompt_data.prompt.owner_id,
+//                             },
+//                             return_prompt_data,
+//                         ) {
+//                             Ok(_) => info!("Sent prompt info successfully",),
+//                             Err(e) => {
+//                                 error!("Failed to send image generation message: {:?}", e);
+//                             }
+//                         }
+//                     }
+//                     Err(e) => {
+//                         error!("Task failed to complete: {:?}", compute_task_info);
+//                         compute_task_info.status = TaskCompletionStatus::Error;
+
+//                         let mut return_prompt_data = compute_task_info.prompt_data.clone();
+
+//                         // Send an error message to the player
+//                         return_prompt_data.error_message = e.clone();
+//                         return_prompt_data.state = PromptState::Error;
+//                         match net.send_message(
+//                             ConnectionId {
+//                                 id: return_prompt_data.prompt.owner_id,
+//                             },
+//                             return_prompt_data,
+//                         ) {
+//                             Ok(_) => info!("Sent prompt info successfully",),
+//                             Err(e) => {
+//                                 error!("Failed to send message: {:?}", e);
+//                             }
+//                         }
+//                     }
+//                 }
+//             }
+//         }
+//         // Remove all finished tasks
+//         room_state_server_info
+//             .image_task_list
+//             .retain(|task| task.status == TaskCompletionStatus::InProgress);
+
+//         // If room is ready to go then proceed
+//         if task_completed {
+//             if check_if_room_is_prepped(&room_state) {
+//                 info!(
+//                     "All tasks are completed for room {}, progressing to next round",
+//                     room_state.room_id
+//                 );
+//                 progress_round(
+//                     room_state.deref_mut(),
+//                     timer.deref_mut(),
+//                     &mut commands,
+//                     entity,
+//                     &net,
+//                 );
+
+//                 // Send updated room state to all players
+//                 let room_state_deref_mut = room_state.deref_mut();
+//                 match send_message_to_all_players::<RoomState>(
+//                     &room_state_deref_mut,
+//                     &room_state_deref_mut,
+//                     &net,
+//                 ) {
+//                     Ok(_) => info!(
+//                         "Updated player state for all players in room {}",
+//                         room_state.room_id
+//                     ),
+//                     Err(e) => error!("Failed to send message: {:?}", e),
+//                 }
+//             }
+//         }
+//     }
+// }
+
+// fn handle_check_prompt_tasks(
+//     net: Res<Network<WebSocketProvider>>,
+//     mut query: Query<(
+//         Entity,
+//         &mut RoomState,
+//         &mut RoundTimer,
+//         &mut RoomStateServerInfo,
+//     )>,
+//     azure_endpoint_info: Res<AzureEndpointInfo>,
+//     mut global_server_values: ResMut<GlobalServerValues>,
+// ) {
+//     for (_entity, _room_state, _timer, mut room_state_server_info) in query.iter_mut() {
+//         if room_state_server_info.prompt_task_list.len() > 0 {
+//             let mut new_image_tasks = Vec::new();
+
+//             for compute_task_info in room_state_server_info.prompt_task_list.iter_mut() {
+//                 if let Some(prompt_check_success) =
+//                     future::block_on(future::poll_once(&mut compute_task_info.task))
+//                 {
+//                     info!(
+//                         "Handling result of check prompt task: {:?}",
+//                         compute_task_info
+//                     );
+
+//                     match prompt_check_success {
+//                         Ok(_) => {
+//                             info!("Prompt check completed successfully");
+//                             compute_task_info.status = TaskCompletionStatus::Completed;
+
+//                             // Create a task to get the image URL for each prompt
+//                             let thread_pool = AsyncComputeTaskPool::get();
+
+//                             let endpoint = azure_endpoint_info.image_gen_endpoint.clone();
+//                             let api_key = azure_endpoint_info.image_gen_key.clone();
+//                             let input_string =
+//                                 compute_task_info.prompt_data.prompt.prompt_answer.clone();
+
+//                             let time_to_wait = increment_server_time(
+//                                 &mut global_server_values.next_available_image_server_time,
+//                                 IMAGE_GEN_TIMEOUT_SECS,
+//                             );
+
+//                             info!("Starting image generation task in {} seconds", time_to_wait);
+
+//                             let task = thread_pool.spawn(async move {
+//                                 std::thread::sleep(Duration::from_secs(time_to_wait as u64));
+//                                 get_image_url(input_string, endpoint, api_key).await
+//                             });
+
+//                             new_image_tasks.push(ImageGenerationTask {
+//                                 task,
+//                                 prompt_data: compute_task_info.prompt_data.clone(),
+//                                 status: TaskCompletionStatus::InProgress,
+//                             });
+
+//                             // Send completed prompt to player
+//                             let mut return_prompt_data = compute_task_info.prompt_data.clone();
+//                             return_prompt_data.state = PromptState::PromptCompleted;
+
+//                             match net.send_message(
+//                                 ConnectionId {
+//                                     id: return_prompt_data.prompt.owner_id,
+//                                 },
+//                                 return_prompt_data,
+//                             ) {
+//                                 Ok(_) => info!("Sent prompt info successfully",),
+//                                 Err(e) => {
+//                                     error!("Failed to send message: {:?}", e);
+//                                 }
+//                             }
+//                         }
+//                         Err(e) => {
+//                             error!("Task failed to complete: {:?}", e);
+//                             compute_task_info.status = TaskCompletionStatus::Error;
+
+//                             let mut return_prompt_data = compute_task_info.prompt_data.clone();
+
+//                             // Send an error message to the player
+//                             return_prompt_data.error_message = e.clone();
+//                             return_prompt_data.state = PromptState::Error;
+//                             match net.send_message(
+//                                 ConnectionId {
+//                                     id: return_prompt_data.prompt.owner_id,
+//                                 },
+//                                 return_prompt_data,
+//                             ) {
+//                                 Ok(_) => info!("Sent prompt info successfully",),
+//                                 Err(e) => {
+//                                     error!("Failed to send message: {:?}", e);
+//                                 }
+//                             }
+//                         }
+//                     }
+//                 }
+//             }
+
+//             // Add new image tasks to the list
+//             room_state_server_info
+//                 .image_task_list
+//                 .extend(new_image_tasks);
+
+//             // Remove all finished tasks
+//             room_state_server_info
+//                 .prompt_task_list
+//                 .retain(|task| task.status == TaskCompletionStatus::InProgress);
+//         }
+//     }
+// }
+
+// fn handle_prompt_generation_tasks(
+//     net: Res<Network<WebSocketProvider>>,
+//     mut commands: Commands,
+//     mut query: Query<(
+//         Entity,
+//         &mut RoomState,
+//         &mut RoundTimer,
+//         &mut RoomStateServerInfo,
+//     )>,
+//     azure_endpoint_info: Res<AzureEndpointInfo>,
+//     mut global_server_values: ResMut<GlobalServerValues>,
+// ) {
+//     for (entity, mut room_state, mut timer, mut room_state_server_info) in query.iter_mut() {
+//         if room_state_server_info.prompt_generation_task_list.len() > 0 {
+//             let mut generate_hints_check = false;
+//             let mut prompt_list_for_hints = Vec::<PromptInfoForHint>::new();
+//             for compute_task_info in room_state_server_info
+//                 .prompt_generation_task_list
+//                 .iter_mut()
+//             {
+//                 if let Some(generated_prompt_list_result) =
+//                     future::block_on(future::poll_once(&mut compute_task_info.task))
+//                 {
+//                     info!(
+//                         "Handling result of prompt generation task: {:?}",
+//                         compute_task_info
+//                     );
+
+//                     match generated_prompt_list_result {
+//                         Err(e) => {
+//                             error!("Failed to generate prompts: {:?}", e);
+//                             compute_task_info.status = TaskCompletionStatus::Error;
+
+//                             // TODO: Handle this error
+//                         }
+//                         Ok(generated_prompt_list) => {
+//                             let mut player_index = 0;
+//                             let mut player_prompt_count = 0;
+
+//                             compute_task_info.status = TaskCompletionStatus::Completed;
+
+//                             info!("Generated prompts: {:?}", generated_prompt_list);
+
+//                             // Send out prompts to all players
+//                             for prompt_text in generated_prompt_list.iter() {
+//                                 let player = &room_state.players[player_index];
+
+//                                 let new_prompt = PromptInfoData {
+//                                     prompt_text: prompt_text.clone(),
+//                                     prompt_answer: String::default(),
+//                                     image_url: String::default(),
+//                                     owner_id: player.id,
+//                                     art_value: thread_rng().gen_range(MIN_ART_VALUE..MAX_ART_VALUE),
+//                                 };
+//                                 let new_prompt_data = PromptInfoDataRequest {
+//                                     prompt: new_prompt,
+//                                     room_id: room_state.room_id,
+//                                     front_end_prompt_index: None,
+//                                     state: PromptState::Proposed,
+//                                     error_message: String::default(),
+//                                 };
+
+//                                 prompt_list_for_hints.push(PromptInfoForHint {
+//                                     prompt: new_prompt_data.prompt.prompt_text.clone(),
+//                                     art_value: new_prompt_data.prompt.art_value.clone(),
+//                                     owner_username: player.username.clone(),
+//                                     player_id: player.id.clone(),
+//                                 });
+
+//                                 // Progress index counters
+//                                 player_prompt_count += 1;
+//                                 if player_prompt_count >= room_state.prompts_per_player {
+//                                     player_index += 1;
+//                                     player_prompt_count = 0;
+//                                 }
+
+//                                 // Send out prompt
+//                                 match net
+//                                     .send_message(ConnectionId { id: player.id }, new_prompt_data)
+//                                 {
+//                                     Ok(_) => info!(
+//                                         "Sent prompt info to {} with id {}",
+//                                         player.username, player.id
+//                                     ),
+//                                     Err(e) => {
+//                                         error!("Failed to send message: {:?}", e);
+//                                     }
+//                                 }
+//                             }
+
+//                             generate_hints_check = true;
+
+//                             // Update room state
+//                             let room_state_deref_mut = room_state.deref_mut();
+
+//                             progress_round(
+//                                 room_state_deref_mut,
+//                                 timer.deref_mut(),
+//                                 &mut commands,
+//                                 entity,
+//                                 &net,
+//                             );
+
+//                             match send_message_to_all_players::<RoomState>(
+//                                 &room_state_deref_mut,
+//                                 &room_state_deref_mut,
+//                                 &net,
+//                             ) {
+//                                 Ok(_) => info!("Started game in room {}", room_state.room_id),
+//                                 Err(e) => error!("Failed to send message: {:?}", e),
+//                             }
+//                         }
+//                     }
+//                 }
+//             }
+
+//             // Remove all finished tasks
+//             room_state_server_info
+//                 .prompt_generation_task_list
+//                 .retain(|task| task.status == TaskCompletionStatus::InProgress);
+
+//             if generate_hints_check {
+//                 // Start generate hints task
+//                 let thread_pool = AsyncComputeTaskPool::get();
+
+//                 let number_of_hints =
+//                     room_state.players.len() as u32 * room_state.prompts_per_player;
+//                 let azure_endpoint_url = azure_endpoint_info.completions_endpoint.clone();
+//                 let azure_endpoint_key = azure_endpoint_info.completions_key.clone();
+
+//                 let time_to_wait = increment_server_time(
+//                     &mut global_server_values.next_available_prompt_server_time,
+//                     PROMPT_GEN_TIMEOUT_SECS * number_of_hints as u64,
+//                 );
+
+//                 let mut rng = StdRng::from_entropy();
+
+//                 info!("Starting hint generation task in {} seconds", time_to_wait);
+
+//                 let room_state_clone = room_state.clone();
+
+//                 let task = thread_pool.spawn(async move {
+//                     std::thread::sleep(Duration::from_secs(time_to_wait as u64));
+//                     generate_hints(
+//                         &prompt_list_for_hints,
+//                         &mut rng,
+//                         azure_endpoint_url,
+//                         azure_endpoint_key,
+//                         &room_state_clone,
+//                     )
+//                     .await
+//                 });
+
+//                 room_state_server_info
+//                     .hint_generation_task_list
+//                     .push(HintGenerationTask {
+//                         task,
+//                         status: TaskCompletionStatus::InProgress,
+//                     });
+//             }
+//         }
+//     }
+// }
+
+// fn handle_hint_generation_tasks(
+//     net: Res<Network<WebSocketProvider>>,
+//     mut commands: Commands,
+//     mut query: Query<(
+//         Entity,
+//         &mut RoomState,
+//         &mut RoundTimer,
+//         &mut RoomStateServerInfo,
+//     )>,
+// ) {
+//     for (entity, mut room_state, mut timer, mut room_state_server_info) in query.iter_mut() {
+//         if room_state_server_info.hint_generation_task_list.len() > 0 {
+//             let mut task_completed = false;
+//             for compute_task_info in room_state_server_info.hint_generation_task_list.iter_mut() {
+//                 if let Some(generated_hint_list_result) =
+//                     future::block_on(future::poll_once(&mut compute_task_info.task))
+//                 {
+//                     info!(
+//                         "Handling result of hint generation task: {:?}",
+//                         compute_task_info
+//                     );
+
+//                     match generated_hint_list_result {
+//                         Err(e) => {
+//                             error!("Failed to generate hints: {:?}", e);
+//                             compute_task_info.status = TaskCompletionStatus::Error;
+
+//                             // TODO: Handle this error
+//                         }
+//                         Ok(generated_hint_list) => {
+//                             compute_task_info.status = TaskCompletionStatus::Completed;
+//                             task_completed = true;
+//                             info!("Generated hints: {:?}", generated_hint_list);
+
+//                             for (player_id, player_hints) in generated_hint_list.iter() {
+//                                 let player_option = &mut room_state
+//                                     .players
+//                                     .iter_mut()
+//                                     .find(|player| player.id == *player_id);
+
+//                                 if let Some(player) = player_option {
+//                                     player.hints = player_hints.clone();
+//                                 }
+//                             }
+//                         }
+//                     }
+//                 }
+//             }
+
+//             // Remove all finished tasks
+//             room_state_server_info
+//                 .hint_generation_task_list
+//                 .retain(|task| task.status == TaskCompletionStatus::InProgress);
+
+//             if task_completed {
+//                 // If all image tasks are completed, then progress the round
+//                 if check_if_room_is_prepped(&room_state) {
+//                     let room_state_deref_mut = room_state.deref_mut();
+
+//                     progress_round(
+//                         room_state_deref_mut,
+//                         timer.deref_mut(),
+//                         &mut commands,
+//                         entity,
+//                         &net,
+//                     );
+
+//                     match send_message_to_all_players::<RoomState>(
+//                         &room_state_deref_mut,
+//                         &room_state_deref_mut,
+//                         &net,
+//                     ) {
+//                         Ok(_) => info!("Started game in room {}", room_state.room_id),
+//                         Err(e) => error!("Failed to send message: {:?}", e),
+//                     }
+//                 }
+//             }
+//         }
+//     }
+// }
+
+// === API Requests ===
+async fn room_join_request(
+    net: EventWorkSender,
+    room_state_list_reference: Arc<Mutex<RoomList>>,
+) -> Result<(), String> {
+    let new_message = match net.get_network_data::<RoomJoinRequest>() {
+        Ok(message) => message,
+        Err(e) => {
+            return Err(format!("Failed to get network data: {:?}", e));
+        }
+    };
+
+    info!("New room join request: {:?}", new_message);
+
+    let mut room_state_list = room_state_list_reference.lock().await;
+
+    let searched_room_option = room_state_list
+        .iter_mut()
+        .find(|search_room_state| search_room_state.1.room_code == new_message.room_code);
+
+    if let Some(mut room) = searched_room_option {
+        // Room is found
+        info!("Found existing room for join request");
+        let room_state = room.1.deref_mut();
+
+        room_state.players.push(Player::new(
+            net.connection_id as u32,
+            new_message.username.clone(),
+        ));
+
+        match send_message_to_all_players::<RoomState, EventWorkSender>(
+            room_state, room_state, &net,
+        )
+        .await
+        {
+            Ok(_) => info!(
+                "Updated player state for all players in room {}",
+                room_state.room_id
+            ),
+            Err(e) => error!("Failed to send message: {:?}", e),
+        }
+    } else {
+        // Else create a new entity with room state
+        info!("No room found creating a new one");
+
+        let mut new_room_state = RoomState {
+            room_id: 0,
+            players: vec![Player::new(
+                net.connection_id as u32,
+                new_message.username.clone(),
+            )],
+            game_state: GameState::WaitingRoom,
+            current_art_bid: ArtBidInfo::default(),
+            prompts_per_player: 100,
+            remaining_prompts: vec![],
+            used_prompts: vec![],
+            room_code: new_message.room_code.clone(),
+            version_number: GAME_VERSION,
+        };
+
+        let room_id = room_state_list.room_state_insert(new_room_state);
+
+        let room_state = match room_state_list.get(&room_id) {
+            Some(room_state) => room_state,
+            None => {
+                return Err(format!(
+                    "Couldn't find newly inserted room state: {}",
+                    room_id
+                ));
             }
         };
-    }
+
+        info!("Sending room state to all players");
+        match send_message_to_all_players::<RoomState, EventWorkSender>(
+            &room_state,
+            &room_state,
+            &net,
+        )
+        .await
+        {
+            Ok(_) => info!(
+                "Updated player state for all players in room {}",
+                room_state.room_id
+            ),
+            Err(e) => error!("Failed to send message: {:?}", e),
+        }
+    };
+
+    Ok(())
 }
 
-fn start_game_request(
-    new_messages: EventReader<NetworkData<StartGameRequest>>,
-    net: Res<Network<WebSocketProvider>>,
-    mut query: Query<
-        (
-            Entity,
-            &mut RoomState,
-            &mut RoundTimer,
-            &mut RoomStateServerInfo,
-        ),
-        Without<InGame>,
-    >,
-    mut commands: Commands,
-    azure_endpoint_info: Res<AzureEndpointInfo>,
-    mut global_server_values: ResMut<GlobalServerValues>,
+async fn start_game_request(
+    net: EventWorkSender,
+    room_state_list_reference: Arc<Mutex<RoomList>>,
+    global_server_values_reference: Arc<Mutex<GlobalServerValues>>,
 ) {
-    find_and_handle_room(
-        new_messages,
-        &net,
-        &mut query,
-        |mut room_state, timer, room_state_server_info, net, entity, _message| {
-            info!("New start game request: {:?}", _message);
+    let new_message = match net.get_network_data::<StartGameRequest>() {
+        Ok(message) => message,
+        Err(e) => {
+            error!("Failed to get network data: {:?}", e);
+            return;
+        }
+    };
 
-            // Choose number of prompts per player
-            if room_state.players.len() <= 3 {
-                room_state.prompts_per_player = 2;
-            } else if room_state.players.len() <= 5 {
-                room_state.prompts_per_player = 2;
-            } else {
-                room_state.prompts_per_player = 1;
+    // Get number of prompts without keeping room_state_list_reference locked
+    let number_of_prompts = {
+        let mut room_state_list = room_state_list_reference.lock().await;
+        // Find room where id matches the connection id
+        let searched_room_option = room_state_list
+            .iter_mut()
+            .find(|(room_id, search_room_state)| search_room_state.room_id == new_message.room_id);
+        let (room_id, room_state) = match searched_room_option {
+            Some(room_info) => room_info,
+            None => {
+                error!("Failed to find room with id: {}", new_message.room_id);
+                return;
             }
+        };
 
-            // Start task to generate all prompts for the game
-            let thread_pool = AsyncComputeTaskPool::get();
+        // Choose number of prompts per player
+        if room_state.players.len() <= 3 {
+            room_state.prompts_per_player = 2;
+        } else if room_state.players.len() <= 5 {
+            room_state.prompts_per_player = 2;
+        } else {
+            room_state.prompts_per_player = 1;
+        }
 
-            let number_of_prompts = room_state.players.len() as u32 * room_state.prompts_per_player;
-            let azure_endpoint_url = azure_endpoint_info.completions_endpoint.clone();
-            let azure_endpoint_key = azure_endpoint_info.completions_key.clone();
+        let net_reference = Arc::new(Mutex::new(net));
+        let net_reference_clone = net_reference.clone();
+        progress_round(room_state, room_state_list_reference.clone(), net_reference).await;
 
-            let time_to_wait = increment_server_time(
+        let net_clone = net_reference_clone.lock().await;
+
+        match send_message_to_all_players::<RoomState, EventWorkSender>(
+            room_state, room_state, &net_clone,
+        )
+        .await
+        {
+            Ok(_) => info!("Started game in room {}", room_state.room_id),
+            Err(e) => error!("Failed to send message: {:?}", e),
+        }
+
+        room_state.players.len() as u32 * room_state.prompts_per_player
+    };
+
+    // Start generate prompts task
+    let (time_to_wait, azure_endpoint_url, azure_endpoint_key) = {
+        let mut global_server_values = global_server_values_reference.lock().await;
+        (
+            increment_server_time(
                 &mut global_server_values.next_available_prompt_server_time,
                 PROMPT_GEN_TIMEOUT_SECS * number_of_prompts as u64,
+            ),
+            global_server_values
+                .endpoint_info
+                .completions_endpoint
+                .clone(),
+            global_server_values.endpoint_info.completions_key.clone(),
+        )
+    };
+
+    let mut rng = StdRng::from_entropy();
+
+    info!(
+        "Starting prompt generation task in {} seconds",
+        time_to_wait
+    );
+
+    tokio::time::sleep(Duration::from_secs(time_to_wait as u64)).await;
+    let prompt_generation_result = generate_prompt_texts(
+        number_of_prompts,
+        &mut rng,
+        azure_endpoint_url,
+        azure_endpoint_key,
+    )
+    .await;
+
+    error!("TODO: Handle prompt generation task");
+}
+
+async fn prompt_info_data_update(
+    net: EventWorkSender,
+    room_state_list_reference: Arc<Mutex<RoomList>>,
+    global_server_values_reference: Arc<Mutex<GlobalServerValues>>,
+) {
+    let message = match net.get_network_data::<PromptInfoDataRequest>() {
+        Ok(message) => message,
+        Err(e) => {
+            error!("Failed to get network data: {:?}", e);
+            return;
+        }
+    };
+
+    info!("Received prompt info data update: {:?}", message);
+
+    let incoming_connection_id = net.connection_id;
+
+    if message.prompt.prompt_answer == "" {
+        // Prompt is invalid send error
+        let mut return_prompt = message.additional_clone();
+        return_prompt.error_message = "Prompt is invalid".to_string();
+        return_prompt.state = PromptState::Error;
+
+        let room_state_list = room_state_list_reference.lock().await;
+        let player_room_state_option = room_state_list.iter().find(|(room_id, room_state)| {
+            room_state
+                .players
+                .iter()
+                .any(|player| player.id == incoming_connection_id as u32)
+        });
+
+        let player = match player_room_state_option {
+            Some((room_id, room_state)) => {
+                match room_state
+                    .players
+                    .iter()
+                    .find(|player| player.id == incoming_connection_id as u32)
+                {
+                    Some(player) => player,
+                    None => {
+                        error!("Failed to find player with id: {}", incoming_connection_id);
+                        return;
+                    }
+                }
+            }
+            None => {
+                error!("Failed to find player with id: {}", incoming_connection_id);
+                return;
+            }
+        };
+
+        match net.send_message(player.id as usize, return_prompt).await {
+            Ok(_) => info!(
+                "Sent prompt info to {} with id {}",
+                player.username, player.id
+            ),
+            Err(e) => {
+                error!("Failed to send message: {:?}", e);
+            }
+        }
+        return;
+    }
+
+    info!("Generating image for prompt: {:?}", message.prompt);
+    // Create a task to check the prompt
+
+    let prompt_text = message.prompt.prompt_text.clone();
+    let prompt_answer = message.prompt.prompt_answer.clone();
+
+    let (time_to_wait, azure_endpoint_url, azure_endpoint_key) = {
+        let mut global_server_values = global_server_values_reference.lock().await;
+        (
+            increment_server_time(
+                &mut global_server_values.next_available_prompt_server_time,
+                PROMPT_GEN_TIMEOUT_SECS,
+            ),
+            global_server_values
+                .endpoint_info
+                .completions_endpoint
+                .clone(),
+            global_server_values.endpoint_info.completions_key.clone(),
+        )
+    };
+
+    info!("Starting prompt check task in {} seconds", time_to_wait);
+    tokio::time::sleep(Duration::from_secs(time_to_wait as u64)).await;
+    let check_prompt_result = check_prompt_answer(
+        prompt_text,
+        prompt_answer,
+        azure_endpoint_url,
+        azure_endpoint_key,
+    )
+    .await;
+
+    error!("TODO: Do check prompt result work");
+}
+
+async fn game_action_request_update(
+    net: EventWorkSender,
+    room_state_list_reference: Arc<Mutex<RoomList>>,
+    global_server_values_reference: Arc<Mutex<GlobalServerValues>>,
+) {
+    let message = match net.get_network_data::<GameActionRequest>() {
+        Ok(message) => message,
+        Err(e) => {
+            error!("Failed to get network data: {:?}", e);
+            return;
+        }
+    };
+
+    let mut room_state_list = room_state_list_reference.lock().await;
+
+    let room_state = match room_state_list.iter_mut().find(|(_room_id, room_state)| {
+        room_state
+            .players
+            .iter()
+            .any(|player| player.id == message.requestor_player_id)
+    }) {
+        Some((_room_id, room_state)) => room_state,
+        None => {
+            error!(
+                "Failed to find room with player: {}",
+                message.requestor_player_id
             );
+            return;
+        }
+    };
 
-            let mut rng = StdRng::from_entropy();
+    // Handle the action
+    let net_reference = Arc::new(Mutex::new(net));
+    let net_reference_clone = net_reference.clone();
+    match message.action {
+        GameAction::Bid => {
+            let bid_result_option = room_state.player_bid(message.requestor_player_id);
+            // Extend timer by 1 second
+            // if timer.0.remaining_secs() < BID_INCREASE_TIMER_START_WINDOW {
+            //     timer.0.set_duration(Duration::from_secs(
+            //         (timer.0.duration().as_secs_f32() + BID_INCREASE_TIMER_VALUE) as u64,
+            //     ));
+            // }
+            error!("TODO: Increase timer by 1 second");
 
-            info!(
-                "Starting prompt generation task in {} seconds",
-                time_to_wait
-            );
+            let net_reference_clone = net_reference.clone();
+            let net_clone = net_reference_clone.lock().await;
 
-            let task = thread_pool.spawn(async move {
-                std::thread::sleep(Duration::from_secs(time_to_wait as u64));
-                generate_prompt_texts(
-                    number_of_prompts,
-                    &mut rng,
-                    azure_endpoint_url,
-                    azure_endpoint_key,
+            // Send a bid notification to all players
+            if let Some(bid_result) = bid_result_option {
+                match send_message_to_all_players::<GamePlayerNotificationRequest, EventWorkSender>(
+                    &bid_result,
+                    room_state,
+                    &net_clone,
                 )
                 .await
-            });
-
-            room_state_server_info
-                .prompt_generation_task_list
-                .push(PromptGenerationTask {
-                    task,
-                    status: TaskCompletionStatus::InProgress,
-                });
-
-            progress_round(room_state, timer, &mut commands, *entity, net);
-
-            let room_state_deref_mut = room_state.deref_mut();
-            match send_message_to_all_players::<RoomState>(
-                &room_state_deref_mut,
-                &room_state_deref_mut,
-                &net,
-            ) {
-                Ok(_) => info!("Started game in room {}", room_state.room_id),
-                Err(e) => error!("Failed to send message: {:?}", e),
-            }
-        },
-    );
-}
-
-fn prompt_info_data_update(
-    new_messages: EventReader<NetworkData<PromptInfoDataRequest>>,
-    net: Res<Network<WebSocketProvider>>,
-    mut query: Query<(
-        Entity,
-        &mut RoomState,
-        &mut RoundTimer,
-        &mut RoomStateServerInfo,
-    )>,
-    azure_endpoint_info: Res<AzureEndpointInfo>,
-    mut global_server_values: ResMut<GlobalServerValues>,
-) {
-    find_and_handle_room(
-        new_messages,
-        &net,
-        &mut query,
-        |room_state, _timer, room_state_server_info, net, _entity, message| {
-            info!("Received prompt info data update: {:?}", message);
-            let message_source = message.source();
-            let incoming_connection_id = message_source.id;
-
-            for player in room_state.players.iter_mut() {
-                if player.id == incoming_connection_id {
-                    if message.prompt.prompt_answer != "" {
-                        info!("Generating image for prompt: {:?}", message.prompt);
-                        // Create a task to check the prompt
-                        let thread_pool = AsyncComputeTaskPool::get();
-
-                        let prompt_text = message.prompt.prompt_text.clone();
-                        let prompt_answer = message.prompt.prompt_answer.clone();
-                        let azure_endpoint_url = azure_endpoint_info.completions_endpoint.clone();
-                        let azure_endpoint_key = azure_endpoint_info.completions_key.clone();
-
-                        let time_to_wait = increment_server_time(
-                            &mut global_server_values.next_available_prompt_server_time,
-                            PROMPT_GEN_TIMEOUT_SECS,
-                        );
-
-                        info!("Starting prompt check task in {} seconds", time_to_wait);
-
-                        let task = thread_pool.spawn(async move {
-                            std::thread::sleep(Duration::from_secs(time_to_wait as u64));
-                            check_prompt_answer(
-                                prompt_text,
-                                prompt_answer,
-                                azure_endpoint_url,
-                                azure_endpoint_key,
-                            )
-                            .await
-                        });
-
-                        room_state_server_info
-                            .prompt_task_list
-                            .push(CheckPromptTask {
-                                task,
-                                prompt_data: message.additional_clone(),
-                                status: TaskCompletionStatus::InProgress,
-                            });
-                    } else {
-                        // Prompt is invalid send error
-                        let mut return_prompt = message.additional_clone();
-                        return_prompt.error_message = "Prompt is invalid".to_string();
-                        return_prompt.state = PromptState::Error;
-                        match net.send_message(ConnectionId { id: player.id }, return_prompt) {
-                            Ok(_) => info!(
-                                "Sent prompt info to {} with id {}",
-                                player.username, player.id
-                            ),
-                            Err(e) => {
-                                error!("Failed to send message: {:?}", e);
-                            }
-                        }
-                    }
+                {
+                    Ok(_) => {}
+                    Err(e) => error!("Failed to send message: {:?}", e),
                 }
+            } else {
+                error!("Failed to process bid: {:?}", room_state);
             }
-        },
-    );
-}
+        }
+        GameAction::ForceBid => {
+            let bid_result_option =
+                room_state.player_force_bid(message.requestor_player_id, message.target_player_id);
 
-fn game_action_request_update(
-    new_messages: EventReader<NetworkData<GameActionRequest>>,
-    net: Res<Network<WebSocketProvider>>,
-    mut commands: Commands,
-    mut query: Query<(
-        Entity,
-        &mut RoomState,
-        &mut RoundTimer,
-        &mut RoomStateServerInfo,
-    )>,
-) {
-    // Find and handle room
-    find_and_handle_room(
-        new_messages,
-        &net,
-        &mut query,
-        |mut room_state, mut timer, mut _room_state_server_info, net, entity, message| {
-            info!("Received game action request: {:?}", message);
+            // if timer.0.remaining_secs() < BID_INCREASE_TIMER_START_WINDOW {
+            //     timer.0.set_duration(Duration::from_secs(
+            //         (timer.0.duration().as_secs_f32() + BID_INCREASE_TIMER_VALUE) as u64,
+            //     ));
+            // }
+            error!("TODO: Increase timer by 1 second");
 
-            // Handle the action
-            match message.action {
-                GameAction::Bid => {
-                    let bid_result_option = room_state.player_bid(message.requestor_player_id);
-                    // Extend timer by 1 second
-                    if timer.0.remaining_secs() < BID_INCREASE_TIMER_START_WINDOW {
-                        timer.0.set_duration(Duration::from_secs(
-                            (timer.0.duration().as_secs_f32() + BID_INCREASE_TIMER_VALUE) as u64,
-                        ));
-                    }
+            let net_reference_clone = net_reference.clone();
+            let net_clone = net_reference_clone.lock().await;
 
-                    // Send a bid notification to all players
-                    if let Some(bid_result) = bid_result_option {
-                        let _ = send_message_to_all_players::<GamePlayerNotificationRequest>(
-                            &bid_result,
-                            room_state,
-                            net,
-                        );
-                    } else {
-                        error!("Failed to process bid: {:?}", room_state);
-                    }
+            // Send a bid notification to all players
+            if let Some(bid_result) = bid_result_option {
+                match send_message_to_all_players::<GamePlayerNotificationRequest, EventWorkSender>(
+                    &bid_result,
+                    room_state,
+                    &net_clone,
+                )
+                .await
+                {
+                    Ok(_) => {}
+                    Err(e) => error!("Failed to send message: {:?}", e),
                 }
-                GameAction::ForceBid => {
-                    let bid_result_option = room_state
-                        .player_force_bid(message.requestor_player_id, message.target_player_id);
-
-                    if timer.0.remaining_secs() < BID_INCREASE_TIMER_START_WINDOW {
-                        timer.0.set_duration(Duration::from_secs(
-                            (timer.0.duration().as_secs_f32() + BID_INCREASE_TIMER_VALUE) as u64,
-                        ));
-                    }
-
-                    // Send a bid notification to all players
-                    if let Some(bid_result) = bid_result_option {
-                        let _ = send_message_to_all_players::<GamePlayerNotificationRequest>(
-                            &bid_result,
-                            room_state,
-                            net,
-                        );
-                    } else {
-                        error!("Failed to process bid: {:?}", room_state);
-                    }
-                }
-                GameAction::EndRound => {
-                    progress_round(
-                        room_state.deref_mut(),
-                        timer.deref_mut(),
-                        &mut commands,
-                        *entity,
-                        &net,
-                    );
-                }
+            } else {
+                error!("Failed to process bid: {:?}", room_state);
             }
+        }
+        GameAction::EndRound => {
+            progress_round(room_state, room_state_list_reference.clone(), net_reference).await;
+        }
+    }
 
-            let room_state_deref_mut = room_state.deref_mut();
-            match send_message_to_all_players::<RoomState>(
-                &room_state_deref_mut,
-                &room_state_deref_mut,
-                &net,
-            ) {
-                Ok(_) => info!(
-                    "Updated player state for all players in room {}",
-                    room_state.room_id
-                ),
-                Err(e) => error!("Failed to send message: {:?}", e),
-            }
-        },
-    );
+    let net_clone = net_reference_clone.lock().await;
+    match send_message_to_all_players::<RoomState, EventWorkSender>(
+        room_state, room_state, &net_clone,
+    )
+    .await
+    {
+        Ok(_) => info!(
+            "Updated player state for all players in room {}",
+            room_state.room_id
+        ),
+        Err(e) => error!("Failed to send message: {:?}", e),
+    }
 }

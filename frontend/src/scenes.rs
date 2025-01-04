@@ -570,7 +570,7 @@ pub fn draw_bidding_round_ui(
 pub fn on_enter_bidding_round(mut round_timer: ResMut<RoundTimer>) {
     // Create a new round timer
     *round_timer = RoundTimer(Timer::from_seconds(
-        BIDDING_ROUND_TIME - 1.0,
+        BIDDING_ROUND_TIME as f32 - 1.0,
         TimerMode::Once,
     ));
 }
@@ -648,7 +648,7 @@ pub fn draw_end_score_screen_ui(
 pub fn on_enter_end_score_screen(mut round_timer: ResMut<RoundTimer>) {
     // Create a new round timer
     *round_timer = RoundTimer(Timer::from_seconds(
-        END_SCORE_SCREEN_TIME - 1.0,
+        END_SCORE_SCREEN_TIME as f32 - 1.0,
         TimerMode::Once,
     ));
 }

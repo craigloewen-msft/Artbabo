@@ -252,7 +252,7 @@ fn setup_networking(
 ) {
 
     let connect_string = if LOCAL_CONNECTION_MODE {
-        "ws://127.0.0.1:8081"
+        "ws://127.0.0.1:8000/ws"
     } else {
         "ws://52.180.68.180:8081"
     };

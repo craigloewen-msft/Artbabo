@@ -5,12 +5,12 @@ use serde::Deserialize;
 use serde::Serialize;
 
 pub const DEBUG_MODE: bool = false;
-pub const LOCAL_CONNECTION_MODE: bool = false;
+pub const LOCAL_CONNECTION_MODE: bool = true;
 pub const GAME_VERSION: u8 = 2;
 
-pub const BIDDING_ROUND_TIME: f32 = 50.0;
-pub const BIDDING_ROUND_END_TIME: f32 = 9.0;
-pub const END_SCORE_SCREEN_TIME: f32 = 30.0;
+pub const BIDDING_ROUND_TIME: u64 = 50;
+pub const BIDDING_ROUND_END_TIME: u64 = 9;
+pub const END_SCORE_SCREEN_TIME: u64 = 30;
 
 pub const NOTIFICATION_LIFETIME: f32 = 3.0;
 
@@ -47,7 +47,6 @@ pub enum GameState {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Player {
     pub username: String,
-    #[serde(skip)]
     pub money: i32,
     pub id: u32,
     pub force_bids_left: u32,

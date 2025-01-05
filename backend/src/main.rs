@@ -238,7 +238,7 @@ async fn rocket() -> _ {
     rocket::build()
         .manage(eventwork_server_reference.clone())
         .mount("/ws", routes![websocket_connect])
-        .mount("/", FileServer::from(relative!("static")))
+        .mount("/", FileServer::from(relative!("website_src")))
 }
 
 // === Helper Functions ===

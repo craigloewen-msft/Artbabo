@@ -13,6 +13,22 @@ RUN cargo install wasm-bindgen-cli
 
 RUN rustup target install wasm32-unknown-unknown
 
+RUN USER=root cargo new --bin artbabo && mv artbabo backend
+RUN USER=root cargo new --bin artbabo_frontend && mv artbabo_frontend frontend
+RUN USER=root cargo new --bin server_responses
+RUN USER=root cargo new --bin event_work_server
+
+COPY backend/Cargo.toml backend/Cargo.lock ./backend/
+COPY frontend/Cargo.toml ./frontend/
+COPY server_responses/Cargo.toml ./server_responses/
+COPY event_work_server/Cargo.toml ./event_work_server/
+
+COPY Cargo.toml Cargo.lock .
+
+# For caching
+RUN cargo build -p artbabo_frontend --release --target wasm32-unknown-unknown
+RUN ROCKET_ENV=stage cargo build --release --path ./backend
+
 COPY backend ./backend
 COPY frontend ./frontend
 COPY server_responses ./server_responses
@@ -21,9 +37,9 @@ COPY Cargo.toml Cargo.lock ./
 
 RUN cargo build -p artbabo_frontend --release --target wasm32-unknown-unknown
 
-RUN wasm-bindgen --no-typescript --target web --out-dir ./website_src/ --out-name "mygame" ./target/wasm32-unknown-unknown/release/artbabo_frontend.wasm
+RUN wasm-bindgen --no-typescript --target web --out-dir ./backend/website_src/ --out-name "mygame" ./target/wasm32-unknown-unknown/release/artbabo_frontend.wasm
 
-RUN cargo install --path ./backend
+RUN ROCKET_ENV=stage cargo install --path ./backend
 
 # Copy the statically-linked binary into a scratch container.
 FROM debian:bookworm
@@ -33,6 +49,6 @@ RUN apt update && \
 
 WORKDIR /usr/src/backend/
 COPY --from=builder /usr/local/cargo/bin/artbabo /usr/src/backend/
-COPY --from=builder /usr/src/website_src /usr/src/backend/website_src
-EXPOSE 8000
-CMD ["artbabo"]
+COPY --from=builder /usr/src/backend/website_src /usr/src/backend/website_src/
+COPY --from=builder /usr/src/backend/Rocket.toml /usr/src/backend/
+CMD ["./artbabo"]

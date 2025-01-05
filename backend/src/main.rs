@@ -111,7 +111,7 @@ impl RoomList {
     }
 }
 
-#[get("/ws")]
+#[get("/")]
 fn websocket_connect<'r>(
     ws: ws::WebSocket,
     eventwork_server: &'r State<Arc<Mutex<EventWorkServer>>>,

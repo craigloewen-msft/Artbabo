@@ -18,11 +18,11 @@ use tokio::sync::Mutex;
 pub use bevy_eventwork::{ConnectionId, NetworkMessage};
 
 pub trait EventWorkSendMessages {
-    async fn send_message<T>(&self, connection_id: usize, message: T) -> Result<(), String>
+    fn send_message<T>(&self, connection_id: usize, message: T) -> impl std::future::Future<Output=Result<(),String>> + Send
     where
         T: NetworkMessage;
 
-    async fn broadcast<T>(&self, message: T) -> Result<(), String>
+    fn broadcast<T>(&self, message: T) -> impl std::future::Future<Output=Result<(),String>> + Send
     where
         T: NetworkMessage;
 }

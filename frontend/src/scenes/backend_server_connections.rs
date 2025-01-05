@@ -254,7 +254,7 @@ fn setup_networking(
     let connect_string = if LOCAL_CONNECTION_MODE {
         "ws://127.0.0.1:8000/ws"
     } else {
-        "ws://52.180.68.180:8081"
+        "wss://artbabo-bub2g5b5e3awg3gp.eastus-01.azurewebsites.net/ws"
     };
 
     info!("Setting up networking and wanting to connect at {}", connect_string);

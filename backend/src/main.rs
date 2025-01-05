@@ -30,6 +30,8 @@ use rocket::futures::lock::Mutex;
 use rocket::tokio;
 use std::sync::Arc;
 
+use rocket::fs::{FileServer, relative};
+
 use event_work_server::{EventWorkSendMessages, EventWorkSender, EventWorkServer, NetworkEvent};
 use rocket::State;
 
@@ -107,11 +109,6 @@ impl RoomList {
     fn iter_mut(&mut self) -> std::collections::hash_map::IterMut<usize, RoomState> {
         self.rooms.iter_mut()
     }
-}
-
-#[get("/")]
-fn hello() -> &'static str {
-    "Hello, world!"
 }
 
 #[get("/ws")]
@@ -240,7 +237,8 @@ async fn rocket() -> _ {
 
     rocket::build()
         .manage(eventwork_server_reference.clone())
-        .mount("/", routes![hello, websocket_connect])
+        .mount("/ws", routes![websocket_connect])
+        .mount("/", FileServer::from(relative!("static")))
 }
 
 // === Helper Functions ===

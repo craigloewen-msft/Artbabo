@@ -1,3 +1,5 @@
 target
 **/.env
-websitesrc
+
+website_src/mygame.js
+website_src/mygame_bg.wasm

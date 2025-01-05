@@ -6,7 +6,7 @@ use serde::Serialize;
 
 pub const DEBUG_MODE: bool = false;
 pub const LOCAL_CONNECTION_MODE: bool = true;
-pub const GAME_VERSION: u8 = 2;
+pub const GAME_VERSION: u8 = 3;
 
 pub const BIDDING_ROUND_TIME: u64 = 50;
 pub const BIDDING_ROUND_END_TIME: u64 = 9;

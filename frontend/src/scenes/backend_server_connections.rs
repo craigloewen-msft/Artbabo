@@ -204,7 +204,7 @@ fn game_end_info_response(
 fn game_player_notification_response(
     mut new_messages: EventReader<NetworkData<GamePlayerNotificationRequest>>,
     mut commands: Commands,
-    mut timer: ResMut<RoundTimer>,
+    // mut timer: ResMut<RoundTimer>,
 ) {
     for new_message in new_messages.read() {
         info!("Received new round end info message: {:?}", new_message);
@@ -212,12 +212,12 @@ fn game_player_notification_response(
 
         match new_message.action {
             GameAction::Bid => {
-                let current_duration = timer.0.duration().as_secs_f32();
-                if timer.0.remaining_secs() < BID_INCREASE_TIMER_START_WINDOW {
-                    timer.0.set_duration(Duration::from_secs(
-                        (current_duration + BID_INCREASE_TIMER_VALUE) as u64,
-                    ));
-                }
+                // let current_duration = timer.0.duration().as_secs_f32();
+                // if timer.0.remaining_secs() < BID_INCREASE_TIMER_START_WINDOW {
+                //     timer.0.set_duration(Duration::from_secs(
+                //         (current_duration + BID_INCREASE_TIMER_VALUE) as u64,
+                //     ));
+                // }
             }
             GameAction::EndRound => {}
             GameAction::ForceBid => {}

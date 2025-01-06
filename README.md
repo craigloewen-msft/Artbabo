@@ -2,7 +2,7 @@
 
 Based on Jackbox's bidiots (Thanks Jackbox for the great games!) it's a rust based web based game.
 
-Site is available at: http://artbabo-bub2g5b5e3awg3gp.eastus-01.azurewebsites.net
+Site is available at: https://artbabo-bub2g5b5e3awg3gp.eastus-01.azurewebsites.net
 
 ## Debugging
 

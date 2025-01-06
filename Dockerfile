@@ -27,7 +27,7 @@ COPY Cargo.toml Cargo.lock .
 
 # For caching
 RUN cargo build -p artbabo_frontend --release --target wasm32-unknown-unknown
-RUN ROCKET_ENV=stage cargo build --release --path ./backend
+RUN ROCKET_ENV=stage cargo build --release -p artbabo
 
 COPY backend ./backend
 COPY frontend ./frontend
